@@ -3,11 +3,23 @@ import { useNavigate } from 'react-router-dom';
 import {
     LayoutDashboard, Users, LogOut, ChevronUp, User, Settings,
     FolderKanban, ClipboardList, BarChart3, Bell, Upload,
-    Wrench, Package, Hammer, Wallet, FileText, ChevronLeft, ChevronRight, Menu
+    Wrench, Package, Hammer, Wallet, FileText, ChevronLeft, ChevronRight, Menu,
+    MessageSquare, Send, X, Loader2, Sparkles
 } from 'lucide-react';
 import { useTranslation } from '../../utils/i18n';
-import { apiFetch } from '../../utils/api';
+import { apiFetch, aiApi } from '../../utils/api';
 import { computeAlerts } from '../../utils/evmHelpers';
+
+function formatMarkdownText(text) {
+    if (!text) return '';
+    let html = text
+        .replace(/\*\*\*(.*?)\*\*\*/g, '<strong>$1</strong>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code class="bg-slate-100 border border-slate-200 px-1 py-0.5 rounded text-[10px] font-mono text-emerald-700">$1</code>')
+        .replace(/\n/g, '<br />');
+    return <span dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 import Overview     from './features/Overview';
 import Analytics    from './features/Analytics';
@@ -360,6 +372,155 @@ export default function DashboardLayout() {
                 </main>
             </div>
 
+            {/* FLOATING AI CHATBOT WIDGET */}
+            <LeafyChatbotWidget />
+
+        </div>
+    );
+}
+
+// ─── DECOUPLED CHATBOT WIDGET TO PREVENT TYPING RE-RENDERING LAG ──────────────────
+function LeafyChatbotWidget() {
+    const [isChatOpen, setIsChatOpen] = useState(false);
+    const [chatInput, setChatInput]   = useState('');
+    const [chatMessages, setChatMessages] = useState([
+        { role: 'assistant', text: 'Hello! I am Leafy AI Assistant. How can I help you analyze your project status, EVM indexes, or schedules today?' }
+    ]);
+    const [sendingChat, setSendingChat] = useState(false);
+    const chatEndRef = useRef(null);
+
+    // Auto scroll chat to bottom
+    useEffect(() => {
+        if (chatEndRef.current && isChatOpen) {
+            chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [chatMessages, isChatOpen]);
+
+    const handleSendChat = async (textToSend = null) => {
+        const text = (textToSend || chatInput).trim();
+        if (!text) return;
+
+        if (!textToSend) setChatInput('');
+
+        const nextMessages = [...chatMessages, { role: 'user', text }];
+        setChatMessages(nextMessages);
+        setSendingChat(true);
+
+        try {
+            const history = nextMessages.slice(-6).map(m => ({
+                role: m.role,
+                text: m.text
+            }));
+            
+            const res = await aiApi.sendMessage(text, history.slice(0, -1));
+            if (res.success) {
+                setChatMessages(prev => [...prev, { role: 'assistant', text: res.data }]);
+            } else {
+                setChatMessages(prev => [...prev, { role: 'assistant', text: 'Sorry, I encountered an error. Please try again.' }]);
+            }
+        } catch (e) {
+            setChatMessages(prev => [...prev, { role: 'assistant', text: 'Could not connect to the AI service. Running offline.' }]);
+        } finally {
+            setSendingChat(false);
+        }
+    };
+
+    return (
+        <div className="fixed bottom-6 right-6 z-50">
+            {!isChatOpen ? (
+                // FAB Button - Styled Premium Emerald Circle
+                <button 
+                    onClick={() => setIsChatOpen(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white p-4 rounded-full shadow-[0_4px_20px_rgba(16,185,129,0.3)] hover:-translate-y-1 active:translate-y-0 transition-all cursor-pointer flex items-center justify-center border border-emerald-500/15"
+                    title="Ask Leafy AI"
+                >
+                    <MessageSquare className="w-5.5 h-5.5 text-white" />
+                </button>
+            ) : (
+                // Chat Window - Premium White Card style with Emerald Accent strip
+                <div className="w-[375px] h-[510px] bg-white border border-slate-200/90 shadow-[0_15px_45px_rgba(0,0,0,0.08)] rounded-[2.2rem] flex flex-col overflow-hidden animate-in slide-in-from-bottom-8 duration-300 relative text-left border-t-4 border-t-emerald-600">
+                    {/* Chat Header - Light theme with soft borders */}
+                    <div className="bg-white border-b border-slate-100 p-5 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-2xl border border-emerald-100/50 shadow-sm shrink-0">
+                                <Sparkles className="w-5.5 h-5.5 animate-pulse text-emerald-600" />
+                            </div>
+                            <div className="flex items-center">
+                                <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest leading-none">Leafy AI</h4>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={() => setIsChatOpen(false)}
+                            className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer border border-transparent"
+                        >
+                            <X className="w-4.5 h-4.5" />
+                        </button>
+                    </div>
+
+                    {/* Messages Box - Clean high-contrast background */}
+                    <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-slate-100/90 scroll-smooth">
+                        {chatMessages.map((msg, idx) => (
+                            <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[85%] rounded-2.5xl px-4.5 py-3 text-xs font-semibold leading-relaxed font-sans shadow-md tracking-wide ${
+                                    msg.role === 'user' 
+                                        ? 'bg-emerald-600 text-white rounded-tr-none border border-emerald-600/10 shadow-[0_4px_12px_rgba(16,185,129,0.15)]' 
+                                        : 'bg-white border border-slate-250 text-slate-850 rounded-tl-none shadow-sm'
+                                }`}>
+                                    {formatMarkdownText(msg.text)}
+                                </div>
+                            </div>
+                        ))}
+                        {sendingChat && (
+                            <div className="flex justify-start">
+                                <div className="bg-white text-slate-500 rounded-2.5xl rounded-tl-none border border-slate-250 px-4.5 py-3 text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-sm">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                                    <span>Thinking...</span>
+                                </div>
+                            </div>
+                        )}
+                        <div ref={chatEndRef} />
+                    </div>
+
+                    {/* Quick suggestions */}
+                    <div className="px-5 py-2.5 border-t border-slate-100 bg-slate-50/30 flex gap-2 overflow-x-auto whitespace-nowrap scrollbar-none">
+                        {[
+                            { text: 'Show Project Summary', prompt: 'List and summarize all projects currently registered in Leafy EPMS.' },
+                            { text: 'What is CPI/SPI?', prompt: 'Explain the Earned Value Management (EVM) metrics CPI and SPI, and how they show project health.' },
+                            { text: 'List Delayed Tasks', prompt: 'Identify and list all tasks across the projects that are currently behind schedule.' },
+                            { text: 'EVM Health Check', prompt: 'Provide a quick health check of the projects based on cost index (CPI) and schedule index (SPI) trends.' }
+                        ].map((suggest, idx) => (
+                            <button 
+                                key={idx}
+                                onClick={() => handleSendChat(suggest.prompt)}
+                                className="px-3 py-2 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-100 text-slate-600 hover:text-emerald-705 rounded-full text-[10px] font-black uppercase tracking-wider transition-all duration-300 cursor-pointer block shrink-0"
+                            >
+                                {suggest.text}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Input Box - Pure white with clean borders */}
+                    <form 
+                        onSubmit={e => { e.preventDefault(); handleSendChat(); }}
+                        className="p-3.5 bg-white border-t border-slate-100 flex items-center gap-2"
+                    >
+                        <input 
+                            type="text"
+                            placeholder="Ask Leafy AI..."
+                            value={chatInput}
+                            onChange={e => setChatInput(e.target.value)}
+                            className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-2.5 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:bg-white transition-all font-semibold"
+                        />
+                        <button 
+                            type="submit"
+                            disabled={sendingChat || !chatInput.trim()}
+                            className="p-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl disabled:opacity-40 disabled:hover:bg-emerald-600 transition-all cursor-pointer flex items-center justify-center shrink-0"
+                        >
+                            <Send className="w-3.5 h-3.5 text-white" />
+                        </button>
+                    </form>
+                </div>
+            )}
         </div>
     );
 }

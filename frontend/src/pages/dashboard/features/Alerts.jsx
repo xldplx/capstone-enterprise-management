@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react';
-import { Bell, AlertTriangle, CheckCircle2, Settings, ChevronRight, Filter, ShieldAlert, ArrowRight, Search, TrendingDown, Clock } from 'lucide-react';
+import { Bell, AlertTriangle, CheckCircle2, Settings, ChevronRight, Filter, ShieldAlert, ArrowRight, Search, TrendingDown, Clock, Sparkles, Loader2 } from 'lucide-react';
 import { computeAlerts } from '../../../utils/evmHelpers';
 import { INPUT_CLASS } from '../../../utils/uiConstants';
-import { apiFetch } from '../../../utils/api';
+import { apiFetch, aiApi } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
+
+function formatMarkdownText(text) {
+    if (!text) return '';
+    let html = text
+        .replace(/\*\*\*(.*?)\*\*\*/g, '<strong>$1</strong>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code class="bg-slate-100 border border-slate-200 px-1 py-0.5 rounded text-[10px] font-mono text-emerald-700">$1</code>')
+        .replace(/\n/g, '<br />');
+    return <span dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 export default function Alerts({ onNavigate }) {
     const { t } = useTranslation();
@@ -16,6 +27,11 @@ export default function Alerts({ onNavigate }) {
     const [expandedAlerts, setExpandedAlerts] = useState({});
     const userRole = localStorage.getItem('userRole');
 
+    // AI Risk Consultant States
+    const [selectedAiProjId, setSelectedAiProjId] = useState('');
+    const [aiRisks, setAiRisks]                   = useState('');
+    const [loadingRisks, setLoadingRisks]         = useState(false);
+
     useEffect(() => {
         apiFetch('/alerts/raw').then(r => {
             if (r.success) { setProjects(r.projects || []); setAllTasks(r.tasks || []); }
@@ -27,6 +43,26 @@ export default function Alerts({ onNavigate }) {
             });
         }).catch(console.error);
     }, []);
+
+    useEffect(() => {
+        if (projects.length === 0) return;
+        const targetId = selectedAiProjId || String(projects[0].id);
+        if (!selectedAiProjId) {
+            setSelectedAiProjId(targetId);
+            return;
+        }
+
+        setLoadingRisks(true);
+        aiApi.getRisks(targetId)
+            .then(res => {
+                if (res.success) setAiRisks(res.data);
+            })
+            .catch(err => {
+                console.error(err);
+                setAiRisks('Could not generate risk mitigation recommendations.');
+            })
+            .finally(() => setLoadingRisks(false));
+    }, [selectedAiProjId, projects]);
 
     const tv = {
         cpi_amber: parseFloat(thresholds.cpi_amber) || 0,
@@ -312,6 +348,50 @@ export default function Alerts({ onNavigate }) {
                                     <span className="text-white font-mono">{scheduleAlertsCount}</span>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+
+                    {/* AI RISK RECOMMENDATIONS PANEL */}
+                    <div className="bg-gradient-to-br from-slate-900 to-slate-950 text-white rounded-3xl p-6 border border-slate-800 shadow-md space-y-4">
+                        <div className="flex items-center gap-2 pb-3 border-b border-white/10">
+                            <Sparkles className="w-5 h-5 text-emerald-400 shrink-0 animate-pulse" />
+                            <div className="text-left">
+                                <h4 className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest leading-none">AI Risks</h4>
+                                <span className="text-[8px] text-slate-400 uppercase tracking-wider font-extrabold block mt-1">Prescriptive Mitigation Audit</span>
+                            </div>
+                        </div>
+                        
+                        {projects.length > 0 && (
+                            <div className="flex flex-col gap-1 text-left">
+                                <label className="text-[8px] font-black uppercase text-slate-400 tracking-wider">Select Project</label>
+                                <select 
+                                    value={selectedAiProjId} 
+                                    onChange={e => setSelectedAiProjId(e.target.value)}
+                                    className="w-full bg-slate-850/80 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-200 outline-none cursor-pointer hover:border-emerald-500/50 transition-colors"
+                                >
+                                    {projects.map(p => (
+                                        <option key={p.id} value={p.id}>{p.project_name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+
+                        <div className="text-left text-xs leading-relaxed space-y-2 border-t border-white/5 pt-3">
+                            {loadingRisks ? (
+                                <div className="flex items-center gap-2 text-slate-400 font-bold uppercase tracking-wider text-[10px] py-4">
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" />
+                                    <span>Analyzing risk variables...</span>
+                                </div>
+                            ) : (
+                                <div className="prose prose-invert max-w-none text-slate-300 text-[11px] font-semibold leading-relaxed select-text space-y-2.5">
+                                    {aiRisks.split('\n\n').map((chunk, idx) => {
+                                        if (chunk.startsWith('###')) {
+                                            return <h5 key={idx} className="font-extrabold text-emerald-400 mt-3 text-[12px] leading-tight">{chunk.replace('###', '').trim()}</h5>;
+                                        }
+                                        return <p key={idx}>{formatMarkdownText(chunk)}</p>;
+                                    })}
+                                </div>
+                            )}
                         </div>
                     </div>
 

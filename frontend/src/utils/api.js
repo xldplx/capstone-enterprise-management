@@ -128,3 +128,10 @@ export const budgetApi = {
     update:       (id, payload)   => apiFetch(`/budget/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
     delete:       (id)            => apiFetch(`/budget/${id}`, { method: 'DELETE' }),
 };
+
+// ─── AI INTEGRATION ──────────────────────────────────────────────────────────────
+export const aiApi = {
+    getInsights: (projectId)      => apiFetch(`/ai/insights/${projectId}`),
+    getRisks:    (projectId)      => apiFetch(`/ai/risks/${projectId}`),
+    sendMessage: (message, history) => apiFetch('/ai/chat', { method: 'POST', body: JSON.stringify({ message, history }) }),
+};

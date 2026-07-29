@@ -1,13 +1,24 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Activity, TrendingUp, AlertTriangle, LineChart as ChartIcon, Target, Loader2, Layers, Briefcase, CheckCircle2 } from 'lucide-react';
+import { Activity, TrendingUp, AlertTriangle, LineChart as ChartIcon, Target, Loader2, Layers, Briefcase, CheckCircle2, Sparkles } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
 import { computeEvm, computeAlerts, indexColor, formatCurrency } from '../../../utils/evmHelpers';
 import { generateSCurveData } from '../../../utils/cpmHelpers';
 import { STATUS_STYLES, CARD_CLASS } from '../../../utils/uiConstants';
-import { apiFetch } from '../../../utils/api';
+import { apiFetch, aiApi } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
 
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'];
+
+function formatMarkdownText(text) {
+    if (!text) return '';
+    let html = text
+        .replace(/\*\*\*(.*?)\*\*\*/g, '<strong>$1</strong>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code class="bg-emerald-950/60 border border-emerald-800 px-1 py-0.5 rounded text-[10px] font-mono text-emerald-300">$1</code>')
+        .replace(/\n/g, '<br />');
+    return <span dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 const formatYAxis = (value) => {
     if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
@@ -54,6 +65,11 @@ export default function Overview({ onNavigate }) {
     const [thresholds, setThresholds] = useState({ cpi_amber: 1.00, cpi_red: 0.90, spi_amber: 1.00, spi_red: 0.90 });
     const [viewMode, setViewMode]     = useState('Daily');
 
+    // AI Insights states
+    const [aiProjectId, setAiProjectId] = useState('portfolio');
+    const [aiInsights, setAiInsights]   = useState('');
+    const [loadingAi, setLoadingAi]     = useState(false);
+
     useEffect(() => {
         setLoading(true);
         Promise.all([apiFetch('/alerts/raw'), apiFetch('/alerts/thresholds')])
@@ -64,6 +80,23 @@ export default function Overview({ onNavigate }) {
             .catch(console.error)
             .finally(() => setLoading(false));
     }, []);
+
+    // Fetch AI insights whenever selected project target changes
+    useEffect(() => {
+        if (loading) return;
+        setLoadingAi(true);
+        aiApi.getInsights(aiProjectId)
+            .then(res => {
+                if (res.success) {
+                    setAiInsights(res.data);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                setAiInsights('Could not generate AI insights at this time.');
+            })
+            .finally(() => setLoadingAi(false));
+    }, [aiProjectId, loading]);
 
     const projectMetrics = useMemo(() => projects.map(proj => {
         const tasks = allTasks.filter(t => t.project_id === proj.id);
@@ -162,6 +195,49 @@ export default function Overview({ onNavigate }) {
                     </div>
                 </div>
             )}
+
+            {/* AI PORTFOLIO INSIGHTS PANEL */}
+            <div className="bg-gradient-to-r from-emerald-950 to-slate-900 border border-slate-800 rounded-3xl p-6 shadow-sm text-white relative overflow-hidden group">
+                <div className="absolute right-[-2%] bottom-[-20%] w-60 h-60 bg-emerald-500/5 blur-[80px] rounded-full pointer-events-none" />
+                <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4 mb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30 shrink-0">
+                            <Sparkles className="w-5 h-5 animate-pulse" />
+                        </div>
+                        <div className="text-left">
+                            <h4 className="text-xs font-black uppercase text-emerald-400 tracking-wider">AI Insights</h4>
+                            <p className="text-[10px] text-slate-350 font-bold uppercase tracking-tight mt-0.5">Real-time analytical insights & recommendations</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 self-start md:self-auto">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Target Scope:</span>
+                        <select 
+                            value={aiProjectId} 
+                            onChange={e => setAiProjectId(e.target.value)}
+                            className="bg-slate-850/80 border border-slate-700/80 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-200 outline-none cursor-pointer hover:border-emerald-500/50 transition-colors"
+                        >
+                            <option value="portfolio">Overall Portfolio</option>
+                            {projects.map(p => (
+                                <option key={p.id} value={p.id}>{p.project_name}</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+
+                <div className="relative z-10 text-left min-h-[50px] flex items-center">
+                    {loadingAi ? (
+                        <div className="flex items-center gap-2.5 text-slate-400 text-xs font-bold uppercase tracking-wider py-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                            <span>Computing project data & generating summary...</span>
+                        </div>
+                    ) : (
+                        <p className="text-slate-200 text-xs sm:text-sm font-medium leading-relaxed font-sans">
+                            {formatMarkdownText(aiInsights)}
+                        </p>
+                    )}
+                </div>
+            </div>
 
             {/* 2. PREMIUM KPI CARDS */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

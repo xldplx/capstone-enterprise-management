@@ -6,6 +6,7 @@ import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
 import { taskToRow } from '../../../utils/taskSchema';
 import { apiFetch } from '../../../utils/api';
 import { load, save } from '../../../utils/localStore';
+import PlanningReadinessPanel from './PlanningReadinessPanel';
 
 // Recursive WBS node component
 function WbsNode({
@@ -269,6 +270,10 @@ export default function ProjectDetail({ project, onBack }) {
     });
     const [lockingBaseline, setLockingBaseline] = useState(false);
     const [lockError, setLockError]             = useState('');
+    const [lockReadiness, setLockReadiness]     = useState(null);
+    const [isReadinessOpen, setIsReadinessOpen] = useState(false);
+    const [highlightedTaskIds, setHighlightedTaskIds] = useState([]);
+    const readinessTriggerRef = useRef(null);
 
     // WBS name overrides — local-only edits until backend PUT route exists.
     const wbsOverrideKey = `epms.wbs_name_overrides.v1.${project.id}`;
@@ -597,6 +602,8 @@ export default function ProjectDetail({ project, onBack }) {
             save(baselineCacheKey, { name, lockedAt: lockedAt.toISOString() });
             setIsLocked(true);
             setIsLockModalOpen(false);
+            setIsReadinessOpen(false);
+            setHighlightedTaskIds([]);
             fetchData();
         } catch (e) {
             setLockError(e.message || 'Server error.');
@@ -606,6 +613,31 @@ export default function ProjectDetail({ project, onBack }) {
     };
 
     const currentStatus = isLocked ? 'active' : (project.status || 'planning');
+
+    const openReadinessWorkspace = () => {
+        setLockError('');
+        setIsReadinessOpen(true);
+    };
+
+    const closeReadinessWorkspace = () => {
+        setIsReadinessOpen(false);
+        setHighlightedTaskIds([]);
+        requestAnimationFrame(() => readinessTriggerRef.current?.focus());
+    };
+
+    const requestBaselineLock = readiness => {
+        if (readiness.summary.blockers > 0 || userRole !== 'Project Manager') return;
+        setLockReadiness(readiness);
+        setLockError('');
+        setIsLockModalOpen(true);
+    };
+
+    const openTaskFromFinding = taskId => {
+        const task = tasks.find(candidate => String(candidate.id) === String(taskId));
+        if (!task) return;
+        setSelectedWbsId(null);
+        openEditTaskModal(task);
+    };
 
     // Tasks sheet uses the shared schema so it round-trips back through Excel Import.
     const handleExport = () => {
@@ -624,6 +656,9 @@ export default function ProjectDetail({ project, onBack }) {
 
     return (
         <div className="space-y-6">
+            <div className="sr-only" aria-live="polite">
+                {lockingBaseline ? 'Baseline lock is being submitted.' : isLocked ? 'Baseline locked successfully.' : lockError}
+            </div>
 
             {/* HEADER */}
             <div className="flex flex-col gap-5">
@@ -652,19 +687,21 @@ export default function ProjectDetail({ project, onBack }) {
                         >
                             <Download className="w-4 h-4" /> Export
                         </button>
-                        {userRole === 'Project Manager' && (
+                        {canEdit && (
                             isLocked ? (
                                 <div className="flex items-center gap-2 px-5 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl font-semibold text-sm">
                                     <Lock className="w-4 h-4" /> Baseline Locked
                                 </div>
                             ) : (
                                 <button
-                                    onClick={() => { if (tasks.length > 0) { setLockError(''); setIsLockModalOpen(true); } }}
-                                    disabled={tasks.length === 0}
-                                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shadow-lg shadow-amber-100 cursor-pointer ${tasks.length > 0 ? 'bg-amber-500 hover:bg-amber-600 text-white' : 'bg-amber-500 text-white opacity-50 cursor-not-allowed'}`}
+                                    ref={readinessTriggerRef}
+                                    onClick={openReadinessWorkspace}
+                                    aria-expanded={isReadinessOpen}
+                                    aria-controls="baseline-readiness-workspace"
+                                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition duration-150 border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 cursor-pointer"
                                 >
                                     <Lock className="w-4 h-4" />
-                                    {tasks.length > 0 ? 'Lock Baseline' : 'Add tasks first'}
+                                    {userRole === 'Project Manager' ? 'Check & Lock Baseline' : 'Check plan'}
                                 </button>
                             )
                         )}
@@ -704,6 +741,20 @@ export default function ProjectDetail({ project, onBack }) {
                     </div>
                 )}
             </div>
+
+            {isReadinessOpen && !isLocked && (
+                <div id="baseline-readiness-workspace">
+                    <PlanningReadinessPanel
+                        projectId={project.id}
+                        tasks={tasks}
+                        canLock={userRole === 'Project Manager'}
+                        onClose={closeReadinessWorkspace}
+                        onOpenTask={openTaskFromFinding}
+                        onRequestLock={requestBaselineLock}
+                        onHighlightTasks={setHighlightedTaskIds}
+                    />
+                </div>
+            )}
 
             {/* MAIN CONTENT: WBS Tree + Tasks Table */}
             <div className="flex gap-6 items-start">
@@ -835,7 +886,7 @@ export default function ProjectDetail({ project, onBack }) {
                                     <tr><td colSpan="9" className="px-6 py-12 text-center"><Loader2 className="w-6 h-6 animate-spin text-slate-300 mx-auto" /></td></tr>
                                 ) : filteredTasks.length > 0 ? (
                                     filteredTasks.map(task => (
-                                        <tr key={task.id} className="hover:bg-slate-50/50 transition-colors">
+                                        <tr key={task.id} className={`transition-colors ${highlightedTaskIds.some(id => String(id) === String(task.id)) ? 'bg-amber-50/80' : 'hover:bg-slate-50/50'}`}>
                                             <td className="px-4 py-3.5 font-semibold text-slate-700">
                                                 <span className="inline-flex items-center gap-1.5">
                                                     {isLocked && <Lock className="w-3 h-3 text-slate-400 shrink-0" aria-label="Locked under baseline" />}
@@ -1221,6 +1272,13 @@ export default function ProjectDetail({ project, onBack }) {
                             This freezes all <strong>{tasks.length} tasks</strong> and their planned values as the reference baseline.
                             Tasks cannot be edited after locking.
                         </p>
+
+                        {lockReadiness?.summary.warnings > 0 && (
+                            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                <p className="font-semibold">Locking with {lockReadiness.summary.warnings} planning warning{lockReadiness.summary.warnings === 1 ? '' : 's'}.</p>
+                                <p className="mt-1 text-xs text-amber-700">Warnings remain in the readiness report and will be recorded in the baseline audit.</p>
+                            </div>
+                        )}
 
                         {lockError && (
                             <div className="p-3 mb-4 rounded-lg bg-red-50/80 border border-red-100 text-red-600 text-xs text-center font-bold uppercase">

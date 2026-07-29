@@ -1,5 +1,6 @@
 const supabase = require('../config/db');
 const { writeAudit } = require('./auditController');
+const { requirePlanningUnlocked } = require('../services/planningLockService');
 
 const getAllProjects = async (req, res) => {
     try {
@@ -47,11 +48,16 @@ const updateProject = async (req, res) => {
         .forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
     updates.updated_at = new Date().toISOString();
     try {
+        const planningFields = ['planned_start', 'planned_end', 'total_budget'];
+        if (planningFields.some(field => req.body[field] !== undefined))
+            await requirePlanningUnlocked(req.params.id);
         const { data, error } = await supabase.from('projects').update(updates).eq('id', req.params.id).select().single();
         if (error) return res.status(500).json({ success: false, message: error.message });
         await writeAudit(req, 'UPDATE', 'project', data.id, { project_name: data.project_name });
         res.json({ success: true, data });
-    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+    } catch (e) {
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
+    }
 };
 
 const deleteProject = async (req, res) => {

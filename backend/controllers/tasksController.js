@@ -9,6 +9,9 @@
  */
 
 const supabase = require('../config/db');
+const { writeAudit } = require('./auditController');
+const { evaluatePlanReadiness } = require('../services/planningReadinessService');
+const { requirePlanningUnlocked } = require('../services/planningLockService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function computeSchedulePct(plannedStart, plannedEnd, today) {
@@ -63,7 +66,7 @@ const getTasksByProject = async (req, res) => {
         const enriched = enrichTasks(data || []);
         res.json({ success: true, data: enriched });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
 };
 
@@ -80,6 +83,7 @@ const createTask = async (req, res) => {
         return res.status(400).json({ success: false, message: 'task_name is required.' });
 
     try {
+        await requirePlanningUnlocked(projectId);
         const { data, error } = await supabase.from('tasks').insert([{
             project_id:       parseInt(projectId),
             wbs_id:           wbs_id           ? parseInt(wbs_id) : null,
@@ -100,12 +104,16 @@ const createTask = async (req, res) => {
         const [enriched] = enrichTasks([data]);
         res.status(201).json({ success: true, data: enriched });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
 };
 
 // ── PUT /api/tasks/:id ────────────────────────────────────────────────────────
 const updateTask = async (req, res) => {
+    const planningFields = [
+        'wbs_id', 'wbs_code', 'task_name', 'planned_start', 'planned_end',
+        'planned_duration', 'planned_cost', 'planned_hours', 'weight', 'predecessors',
+    ];
     const updates = {};
     [
         'wbs_id', 'wbs_code', 'task_name', 'planned_start', 'planned_end',
@@ -116,6 +124,13 @@ const updateTask = async (req, res) => {
     updates.updated_at = new Date().toISOString();
 
     try {
+        if (planningFields.some(field => req.body[field] !== undefined)) {
+            const { data: existing, error: findError } = await supabase
+                .from('tasks').select('project_id').eq('id', req.params.id).single();
+            if (findError || !existing)
+                return res.status(404).json({ success: false, message: 'Task not found.' });
+            await requirePlanningUnlocked(existing.project_id);
+        }
         const { data, error } = await supabase
             .from('tasks')
             .update(updates)
@@ -128,18 +143,23 @@ const updateTask = async (req, res) => {
         const [enriched] = enrichTasks([data]);
         res.json({ success: true, data: enriched });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
 };
 
 // ── DELETE /api/tasks/:id ─────────────────────────────────────────────────────
 const deleteTask = async (req, res) => {
     try {
+        const { data: existing, error: findError } = await supabase
+            .from('tasks').select('project_id').eq('id', req.params.id).single();
+        if (findError || !existing)
+            return res.status(404).json({ success: false, message: 'Task not found.' });
+        await requirePlanningUnlocked(existing.project_id);
         const { error } = await supabase.from('tasks').delete().eq('id', req.params.id);
         if (error) return res.status(500).json({ success: false, message: error.message });
         res.json({ success: true, message: 'Task deleted.' });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
 };
 
@@ -152,6 +172,7 @@ const bulkImportTasks = async (req, res) => {
         return res.status(400).json({ success: false, message: 'tasks array is required.' });
 
     try {
+        await requirePlanningUnlocked(projectId);
         const rows = tasks.map(t => ({
             project_id:    parseInt(projectId),
             wbs_code:      t.wbs_code      || null,
@@ -171,7 +192,7 @@ const bulkImportTasks = async (req, res) => {
         const enriched = enrichTasks(data || []);
         res.status(201).json({ success: true, imported: enriched.length, data: enriched });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
 };
 
@@ -181,32 +202,66 @@ const lockBaseline = async (req, res) => {
     const { baseline_name } = req.body;
 
     try {
-        const { data: tasks } = await supabase
-            .from('tasks')
-            .select('*')
-            .eq('project_id', projectId);
+        await requirePlanningUnlocked(projectId);
 
-        if (!tasks || tasks.length === 0)
-            return res.status(400).json({ success: false, message: 'No tasks to lock.' });
+        const [projectResult, wbsResult, tasksResult] = await Promise.all([
+            supabase.from('projects').select('*').eq('id', projectId).single(),
+            supabase.from('wbs').select('*').eq('project_id', projectId),
+            supabase.from('tasks').select('*').eq('project_id', projectId),
+        ]);
 
-        await supabase.from('baselines').insert([{
+        if (projectResult.error || !projectResult.data)
+            return res.status(404).json({ success: false, message: 'Project not found.' });
+        if (wbsResult.error)
+            return res.status(500).json({ success: false, message: wbsResult.error.message });
+        if (tasksResult.error)
+            return res.status(500).json({ success: false, message: tasksResult.error.message });
+
+        const tasks = tasksResult.data || [];
+        const readiness = evaluatePlanReadiness(projectResult.data, wbsResult.data || [], tasks);
+        if (readiness.summary.blockers > 0) {
+            return res.status(409).json({
+                success: false,
+                code: 'PLAN_NOT_READY',
+                message: 'Resolve all planning blockers before locking the baseline.',
+                data: readiness,
+            });
+        }
+
+        const { error: baselineError } = await supabase.from('baselines').insert([{
             project_id:    parseInt(projectId),
             baseline_name: baseline_name || 'Baseline Rev.0',
             locked_by:     req.user.username,
             snapshot:      tasks,
         }]);
+        if (baselineError)
+            return res.status(500).json({ success: false, message: baselineError.message });
 
-        await supabase.from('tasks')
+        const { error: tasksLockError } = await supabase.from('tasks')
             .update({ is_baseline_locked: true, updated_at: new Date().toISOString() })
             .eq('project_id', projectId);
+        if (tasksLockError)
+            return res.status(500).json({ success: false, message: tasksLockError.message });
 
-        await supabase.from('projects')
+        const { error: projectUpdateError } = await supabase.from('projects')
             .update({ status: 'active', updated_at: new Date().toISOString() })
             .eq('id', projectId);
+        if (projectUpdateError)
+            return res.status(500).json({ success: false, message: projectUpdateError.message });
 
-        res.json({ success: true, message: 'Baseline locked.', task_count: tasks.length });
+        const warningCodes = [...new Set(readiness.findings
+            .filter(finding => finding.severity === 'warning')
+            .map(finding => finding.code))];
+        await writeAudit(req, 'LOCK', 'baseline', projectId, {
+            baseline_name: baseline_name || 'Baseline Rev.0',
+            task_count: tasks.length,
+            readiness_state: readiness.state,
+            accepted_warning_codes: warningCodes,
+        });
+
+        res.json({ success: true, message: 'Baseline locked.', task_count: tasks.length, readiness });
     } catch (e) {
-        res.status(500).json({ success: false, message: e.message });
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
 };
 

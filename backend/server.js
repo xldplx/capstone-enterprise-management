@@ -34,6 +34,7 @@ const audit       = require('./controllers/auditController');
 const materials   = require('./controllers/materialsController');
 const equipment   = require('./controllers/equipmentController');
 const report      = require('./controllers/reportController');
+const readiness   = require('./controllers/planningReadinessController');
 
 const app = express();
 
@@ -79,6 +80,10 @@ app.use(requestLogger);
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (_, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
+// ── AI Integration ────────────────────────────────────────────────────────────
+const aiRoutes = require('./routes/aiRoutes');
+app.use('/api/ai', aiRoutes);
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 app.post('/api/login',   auth.login);
 app.post('/api/refresh', auth.refreshToken);
@@ -111,6 +116,8 @@ app.delete('/api/projects/:projectId/wbs/:id', authenticate, authorize('Project 
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 // PENTING: route spesifik harus didaftarkan SEBELUM route generik (:id)
+app.get   ('/api/projects/:projectId/planning-readiness', authenticate, authorize('Project Manager', 'Planner'), readiness.getPlanningReadiness);
+app.post  ('/api/projects/:projectId/planning-readiness/dependency-preview', authenticate, authorize('Project Manager', 'Planner'), readiness.previewDependency);
 app.get   ('/api/projects/:projectId/tasks/baseline', authenticate, tasks.getBaselineInfo);
 app.post  ('/api/projects/:projectId/tasks/baseline', authenticate, authorize('Project Manager'), tasks.lockBaseline);
 app.post  ('/api/projects/:projectId/tasks/import',   authenticate, authorize('Project Manager', 'Planner'), tasks.bulkImportTasks);
