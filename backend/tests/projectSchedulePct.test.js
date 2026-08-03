@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { schedulePctFromTasks } = require('../controllers/projectsController');
+const { schedulePctFromTasks, withSchedulePct } = require('../controllers/projectsController');
 
 // UTC-day timestamps, matching parseUtcDay — a local `new Date('...T00:00:00')`
 // would sit 7 hours off in UTC+7 and skew every fraction.
@@ -68,4 +68,25 @@ test('a mid-flight project yields a usable SPI instead of null', () => {
     const PV = BAC * schedulePct;
     assert.equal(PV, 500);
     assert.equal(PV > 0 ? EV / PV : null, 0.8);
+});
+
+// Existing projects were seeded with schedule_pct values. Recomputing over the
+// top of them would move CPI/SPI on dashboards that were already correct.
+test('a stored schedule_pct is left alone', () => {
+    const tasks = [task({ planned_cost: 1000 })];
+    const project = { id: 1, schedule_pct: 0.22 };
+    assert.equal(withSchedulePct(project, tasks).schedule_pct, 0.22);
+});
+
+test('a project with no usable schedule_pct gets the derived one', () => {
+    const tasks = [task({ planned_cost: 1000, planned_start: '2020-01-01', planned_end: '2020-01-11' })];
+    for (const stored of [0, null, undefined, '']) {
+        const result = withSchedulePct({ id: 1, schedule_pct: stored }, tasks);
+        assert.equal(result.schedule_pct, 1, `stored ${JSON.stringify(stored)} should derive`);
+    }
+});
+
+test('a project with no costed tasks is returned untouched', () => {
+    const project = { id: 1, schedule_pct: 0 };
+    assert.equal(withSchedulePct(project, []), project);
 });

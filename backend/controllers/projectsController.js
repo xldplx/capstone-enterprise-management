@@ -44,8 +44,15 @@ function utcToday() {
     return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 }
 
-// Attach a derived schedule_pct without writing to the column.
+// Fill in schedule_pct only when the column has nothing usable. A value that was
+// set deliberately (seeded, or entered through the API) stays authoritative --
+// silently replacing it would move CPI/SPI on projects that were already
+// reporting correctly. Projects created through the UI never receive one, so
+// they arrive as 0 and get the derived value.
 function withSchedulePct(project, tasks) {
+    const stored = parseFloat(project.schedule_pct);
+    if (Number.isFinite(stored) && stored > 0) return project;
+
     const derived = schedulePctFromTasks(tasks, utcToday());
     return derived === null
         ? project
@@ -146,5 +153,5 @@ const deleteProject = async (req, res) => {
 module.exports = {
     getAllProjects, getProjectById, createProject, updateProject, deleteProject,
     // exported for tests
-    schedulePctFromTasks,
+    schedulePctFromTasks, withSchedulePct,
 };
