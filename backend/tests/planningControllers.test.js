@@ -275,6 +275,28 @@ test('bulk import rejects unknown wbs codes without inserting anything', async (
     assert.equal(supabase.operations.some(operation => operation.action === 'insert'), false);
 });
 
+test('wbs code matching tolerates stray whitespace and names a blank code', async () => {
+    const padded = [{ id: 10, project_id: 1, wbs_code: '1.1 ', name: 'Delivery' }];
+    const supabase = fakeSupabase({ projects: [project], wbs: padded, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+
+    const ok = responseRecorder();
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ wbs_code: '1.1', task_name: 'Padded', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, ok);
+    assert.equal(ok.statusCode, 201);
+    assert.equal(supabase.operations.find(op => op.table === 'tasks' && op.action === 'insert').payload[0].wbs_id, 10);
+
+    const blank = responseRecorder();
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ task_name: 'No code', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, blank);
+    assert.equal(blank.statusCode, 400);
+    assert.match(blank.body.message, /\(blank\)/);
+});
+
 // Guards the whole demo path: import -> readiness -> lock. Before the wbs_id fix
 // every imported task raised MISSING_WBS and the baseline could never be locked.
 test('bulk-imported tasks pass readiness without MISSING_WBS', async () => {

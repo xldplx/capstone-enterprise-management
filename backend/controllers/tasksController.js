@@ -181,7 +181,10 @@ const bulkImportTasks = async (req, res) => {
             .from('wbs').select('id, wbs_code').eq('project_id', parseInt(projectId));
         if (wbsError) return res.status(500).json({ success: false, message: wbsError.message });
 
-        const wbsIdByCode = new Map((wbsNodes || []).map(node => [String(node.wbs_code), node.id]));
+        // Trim both sides: a node saved as "1.1 " must still match a sheet cell of "1.1".
+        const wbsIdByCode = new Map((wbsNodes || [])
+            .filter(node => node.wbs_code != null && String(node.wbs_code).trim() !== '')
+            .map(node => [String(node.wbs_code).trim(), node.id]));
         const unknownCodes = [...new Set(tasks
             .map(t => String(t.wbs_code || '').trim())
             .filter(code => !wbsIdByCode.has(code)))];
@@ -191,7 +194,7 @@ const bulkImportTasks = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 code: 'UNKNOWN_WBS_CODE',
-                message: `These WBS codes do not exist in this project: ${unknownCodes.join(', ')}. Create the WBS nodes first, or correct the spreadsheet.`,
+                message: `These WBS codes do not exist in this project: ${unknownCodes.map(code => code || '(blank)').join(', ')}. Create the WBS nodes first, or correct the spreadsheet.`,
             });
         }
 
