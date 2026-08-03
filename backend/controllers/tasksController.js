@@ -230,7 +230,9 @@ const lockBaseline = async (req, res) => {
         const [projectResult, wbsResult, tasksResult] = await Promise.all([
             supabase.from('projects').select('*').eq('id', projectId).single(),
             supabase.from('wbs').select('*').eq('project_id', projectId),
-            supabase.from('tasks').select('*').eq('project_id', projectId),
+            // Same ordering as planningReadinessController so the readiness the user
+            // approved and the one that gates the lock are byte-identical.
+            supabase.from('tasks').select('*').eq('project_id', projectId).order('wbs_code'),
         ]);
 
         if (projectResult.error || !projectResult.data)
@@ -251,15 +253,14 @@ const lockBaseline = async (req, res) => {
             });
         }
 
-        const { error: baselineError } = await supabase.from('baselines').insert([{
-            project_id:    parseInt(projectId),
-            baseline_name: baseline_name || 'Baseline Rev.0',
-            locked_by:     req.user.username,
-            snapshot:      tasks,
-        }]);
-        if (baselineError)
-            return res.status(500).json({ success: false, message: baselineError.message });
-
+        // These three writes are not one transaction — supabase-js cannot open one.
+        // The correct fix is a single plpgsql function called through rpc(), which
+        // PostgREST wraps in a transaction; that needs a schema migration.
+        // Until then, order matters: isProjectPlanningLocked() treats the mere
+        // existence of a baselines row as "locked", so the baseline insert goes
+        // LAST. If an earlier write fails there is no baseline row, the project
+        // stays unlocked, and the PM can simply retry. Inserting first would leave
+        // a project locked forever with no unlock route.
         const { error: tasksLockError } = await supabase.from('tasks')
             .update({ is_baseline_locked: true, updated_at: new Date().toISOString() })
             .eq('project_id', projectId);
@@ -271,6 +272,15 @@ const lockBaseline = async (req, res) => {
             .eq('id', projectId);
         if (projectUpdateError)
             return res.status(500).json({ success: false, message: projectUpdateError.message });
+
+        const { error: baselineError } = await supabase.from('baselines').insert([{
+            project_id:    parseInt(projectId),
+            baseline_name: baseline_name || 'Baseline Rev.0',
+            locked_by:     req.user.username,
+            snapshot:      tasks,
+        }]);
+        if (baselineError)
+            return res.status(500).json({ success: false, message: baselineError.message });
 
         const warningCodes = [...new Set(readiness.findings
             .filter(finding => finding.severity === 'warning')

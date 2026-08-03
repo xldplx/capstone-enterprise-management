@@ -37,14 +37,22 @@ function taskLabel(task) {
     return task?.task_name || `Task ${task?.id}`;
 }
 
+// Findings are built by filtering the incoming task array, so taskIds would
+// otherwise inherit whatever order the database happened to return. Sort them
+// to make the whole report depend on the plan, not on row order.
+function sortIds(ids) {
+    return ids.map(comparableId)
+        .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+}
+
 function makeFinding({ code, severity, title, explanation, taskIds = [], wbsIds = [], edge = null, previewAvailable = false }) {
     return {
         code,
         severity,
         title,
         explanation,
-        taskIds: taskIds.map(comparableId),
-        ...(wbsIds.length ? { wbsIds: wbsIds.map(comparableId) } : {}),
+        taskIds: sortIds(taskIds),
+        ...(wbsIds.length ? { wbsIds: sortIds(wbsIds) } : {}),
         ...(edge ? {
             edge: {
                 predecessorId: comparableId(edge.predecessorId),

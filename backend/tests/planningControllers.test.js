@@ -205,6 +205,41 @@ test('planning task updates are rejected after lock while actual updates continu
     assert.equal(lockChecks, 1);
 });
 
+// The three lock writes are not transactional. Ordering the baseline insert last
+// means a partial failure leaves the project unlocked and retryable, instead of
+// permanently locked with no unlock route.
+test('a failed task write during lock leaves no baseline row, so the lock can be retried', async () => {
+    const tasks = [
+        plannedTask({ id: 1, weight: 0.5 }),
+        plannedTask({ id: 2, task_name: 'Task 2', weight: 0.5, planned_start: '2026-01-06', planned_end: '2026-01-10' }),
+    ];
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks, baselines: [] });
+
+    const realFrom = supabase.from.bind(supabase);
+    supabase.from = (table) => {
+        const query = realFrom(table);
+        if (table !== 'tasks') return query;
+        const realUpdate = query.update.bind(query);
+        query.update = (payload) => {
+            realUpdate(payload);
+            query.execute = async () => ({ data: null, error: { message: 'connection lost' } });
+            return query;
+        };
+        return query;
+    };
+
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.lockBaseline({
+        params: { projectId: '1' }, body: {}, user: { username: 'pm' }, headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 500);
+    assert.equal(supabase.tables.baselines.length, 0);
+    assert.equal(supabase.operations.some(op => op.table === 'baselines' && op.action === 'insert'), false);
+});
+
 test('bulk import resolves wbs_code to wbs_id so imported tasks are linked', async () => {
     const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
     const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
