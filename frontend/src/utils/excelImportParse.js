@@ -26,7 +26,14 @@ export function toISODate(value) {
         return `${year}-${month}-${day}`;
     }
     const text = String(value ?? '').trim();
-    return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : '';
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+    if (!match) return '';
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return '';
+    return `${match[1]}-${match[2]}-${match[3]}`;
 }
 
 export function autoDetectMapping(headers) {
@@ -46,7 +53,7 @@ export function autoDetectMapping(headers) {
     headers.forEach((header, index) => {
         const norm = normalize(header);
         for (const [field, keywords] of Object.entries(patterns)) {
-            if (!mapping[field] && keywords.some(kw => norm.includes(kw))) {
+            if (mapping[field] === undefined && keywords.some(kw => norm.includes(kw))) {
                 mapping[field] = index;
             }
         }
@@ -99,8 +106,13 @@ export function validateRow(row, mapping) {
     // Optional: weight
     const weight = getValue('weight');
     if (weight !== undefined && weight !== '' && weight !== null) {
-        const w = parseFloat(weight);
-        if (isNaN(w) || w < 0 || w > 1) errors.push('Weight must be 0–1');
+        const text = String(weight).trim();
+        if (typeof weight === 'string' && !/^-?\d+(\.\d+)?$/.test(text)) {
+            errors.push('Weight must be a plain number from 0–1');
+        } else {
+            const w = Number(text);
+            if (!Number.isFinite(w) || w < 0 || w > 1) errors.push('Weight must be 0–1');
+        }
     }
 
     return errors;
@@ -116,6 +128,6 @@ export function parseTask(row, mapping) {
         planned_hours: parseFloat(getValue('planned_hours')) || 0,
         planned_start: toISODate(getValue('planned_start')),
         planned_end:   toISODate(getValue('planned_end')),
-        weight:        parseFloat(getValue('weight'))        || 0,
+        weight:        Number(getValue('weight'))            || 0,
     };
 }

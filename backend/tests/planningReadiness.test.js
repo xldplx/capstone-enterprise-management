@@ -82,6 +82,17 @@ test('self, dangling and cyclic dependencies are blocked', () => {
     assert.ok(codes(cycle).includes('DEPENDENCY_CYCLE'));
 });
 
+test('cycle finding names only tasks that are actually in the cycle', () => {
+    const report = evaluatePlanReadiness(project, wbs, [
+        task({ id: 1, weight: 0.25, predecessors: [2] }),
+        task({ id: 2, weight: 0.25, predecessors: [1] }),
+        task({ id: 3, weight: 0.5, predecessors: [2] }),
+    ]);
+
+    const finding = report.findings.find(item => item.code === 'DEPENDENCY_CYCLE');
+    assert.deepEqual(finding.taskIds, [1, 2]);
+});
+
 test('same-day handoff is valid and earlier successor is a previewable conflict', () => {
     const valid = evaluatePlanReadiness(project, wbs, [
         task({ id: 1, weight: 0.5, planned_end: '2026-01-05' }),
@@ -120,6 +131,21 @@ test('budget variance is informational', () => {
     const finding = report.findings.find(item => item.code === 'BUDGET_VARIANCE');
     assert.equal(finding.severity, 'info');
     assert.equal(report.metrics.budgetDelta, 200);
+});
+
+test('costs that reconcile to the cent do not create a floating-point budget variance', () => {
+    const report = evaluatePlanReadiness(
+        { ...project, total_budget: '300.30' },
+        wbs,
+        [
+            task({ id: 1, weight: 0.5, planned_cost: '100.10' }),
+            task({ id: 2, weight: 0.5, planned_cost: '200.20' }),
+        ],
+    );
+
+    assert.equal(report.metrics.plannedCost, 300.3);
+    assert.equal(report.metrics.budgetDelta, 0);
+    assert.ok(!codes(report).includes('BUDGET_VARIANCE'));
 });
 
 test('shift preview preserves duration and propagates using the latest predecessor', () => {
@@ -161,6 +187,21 @@ test('shift preview is rejected while any cycle exists', () => {
     ];
     assert.throws(() => previewDependencyRemedy(project, wbs, tasks, {
         predecessorId: 1, successorId: 2, remedy: 'shift_successor_chain',
+    }), error => error.code === 'DEPENDENCY_CYCLE' && error.statusCode === 422);
+});
+
+test('shift preview is also rejected when the plan contains a self-dependency', () => {
+    const tasks = [
+        task({ id: 1, weight: 0.25, predecessors: [1] }),
+        task({ id: 2, weight: 0.25, planned_end: '2026-01-08' }),
+        task({ id: 3, weight: 0.5, planned_start: '2026-01-05', planned_end: '2026-01-10', predecessors: [2] }),
+    ];
+
+    const report = evaluatePlanReadiness(project, wbs, tasks);
+    const conflict = report.findings.find(item => item.code === 'DATE_ORDER_CONFLICT');
+    assert.equal(conflict.previewAvailable, false);
+    assert.throws(() => previewDependencyRemedy(project, wbs, tasks, {
+        predecessorId: 2, successorId: 3, remedy: 'shift_successor_chain',
     }), error => error.code === 'DEPENDENCY_CYCLE' && error.statusCode === 422);
 });
 

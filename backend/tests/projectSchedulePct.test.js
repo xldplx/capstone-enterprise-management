@@ -90,3 +90,22 @@ test('a project with no costed tasks is returned untouched', () => {
     const project = { id: 1, schedule_pct: 0 };
     assert.equal(withSchedulePct(project, []), project);
 });
+
+test('derived planned value uses the Jakarta calendar day near UTC midnight', () => {
+    const RealDate = global.Date;
+    global.Date = class extends RealDate {
+        constructor(...args) {
+            super(...(args.length ? args : ['2026-04-02T00:30:00+07:00']));
+        }
+    };
+
+    try {
+        const result = withSchedulePct({ id: 1, schedule_pct: 0 }, [task({
+            planned_start: '2026-04-01',
+            planned_end: '2026-04-03',
+        })]);
+        assert.equal(result.schedule_pct, 0.5);
+    } finally {
+        global.Date = RealDate;
+    }
+});

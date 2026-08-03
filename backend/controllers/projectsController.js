@@ -41,7 +41,19 @@ function schedulePctFromTasks(tasks, today) {
 
 function utcToday() {
     const now = new Date();
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(now).map(part => [part.type, part.value]));
+    return parseUtcDay(`${parts.year}-${parts.month}-${parts.day}`);
+}
+
+function parseSchedulePctInput(value) {
+    if (value === undefined || value === null || value === '') return 0;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : NaN;
 }
 
 // Fill in schedule_pct only when the column has nothing usable. A value that was
@@ -103,6 +115,9 @@ const createProject = async (req, res) => {
     const { project_name, project_code, description, planned_start, planned_end, total_budget, schedule_pct } = req.body;
     if (!project_name || !project_code)
         return res.status(400).json({ success: false, message: 'project_name and project_code are required.' });
+    const normalizedSchedulePct = parseSchedulePctInput(schedule_pct);
+    if (Number.isNaN(normalizedSchedulePct))
+        return res.status(400).json({ success: false, code: 'INVALID_SCHEDULE_PCT', message: 'schedule_pct must be between 0 and 1.' });
     try {
         const { data, error } = await supabase.from('projects').insert([{
             project_name, project_code,
@@ -110,7 +125,7 @@ const createProject = async (req, res) => {
             planned_start: planned_start || null,
             planned_end:   planned_end   || null,
             total_budget:  parseFloat(total_budget)  || 0,
-            schedule_pct:  parseFloat(schedule_pct)  || 0,
+            schedule_pct:  normalizedSchedulePct,
             status: 'planning',
             created_by: req.user.username,
         }]).select().single();
@@ -127,9 +142,15 @@ const updateProject = async (req, res) => {
     const updates = {};
     ['project_name','description','planned_start','planned_end','total_budget','status','schedule_pct']
         .forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+    if (req.body.schedule_pct !== undefined) {
+        const normalizedSchedulePct = parseSchedulePctInput(req.body.schedule_pct);
+        if (Number.isNaN(normalizedSchedulePct))
+            return res.status(400).json({ success: false, code: 'INVALID_SCHEDULE_PCT', message: 'schedule_pct must be between 0 and 1.' });
+        updates.schedule_pct = normalizedSchedulePct;
+    }
     updates.updated_at = new Date().toISOString();
     try {
-        const planningFields = ['planned_start', 'planned_end', 'total_budget'];
+        const planningFields = ['planned_start', 'planned_end', 'total_budget', 'schedule_pct'];
         if (planningFields.some(field => req.body[field] !== undefined))
             await requirePlanningUnlocked(req.params.id);
         const { data, error } = await supabase.from('projects').update(updates).eq('id', req.params.id).select().single();

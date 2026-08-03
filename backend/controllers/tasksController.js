@@ -10,14 +10,15 @@
 
 const supabase = require('../config/db');
 const { writeAudit } = require('./auditController');
-const { evaluatePlanReadiness } = require('../services/planningReadinessService');
+const { evaluatePlanReadiness, parseUtcDay } = require('../services/planningReadinessService');
 const { requirePlanningUnlocked } = require('../services/planningLockService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function computeSchedulePct(plannedStart, plannedEnd, today) {
     if (!plannedStart || !plannedEnd) return 0;
-    const start   = new Date(plannedStart);
-    const end     = new Date(plannedEnd);
+    const start   = parseUtcDay(plannedStart);
+    const end     = parseUtcDay(plannedEnd);
+    if (start == null || end == null) return 0;
     const total   = end - start;
     if (total <= 0) return 1;
     const elapsed = today - start;
@@ -27,15 +28,22 @@ function computeSchedulePct(plannedStart, plannedEnd, today) {
 
 function computeFloat(plannedEnd, today) {
     if (!plannedEnd) return null;
-    const end  = new Date(plannedEnd);
+    const end = parseUtcDay(plannedEnd);
+    if (end == null) return null;
     const days = Math.floor((end - today) / (1000 * 60 * 60 * 24));
     return Math.max(0, days);
 }
 
 // Inject schedule_pct & float ke setiap task berdasarkan tanggal hari ini
 function enrichTasks(tasks) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // awal hari — konsisten
+    const now = new Date();
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(now).map(part => [part.type, part.value]));
+    const today = parseUtcDay(`${parts.year}-${parts.month}-${parts.day}`);
 
     return tasks.map(task => {
         // Gunakan nilai DB jika sudah up-to-date (di-set hari ini via PATCH),
@@ -192,6 +200,17 @@ const bulkImportTasks = async (req, res) => {
     if (!Array.isArray(tasks) || tasks.length === 0)
         return res.status(400).json({ success: false, message: 'tasks array is required.' });
 
+    const invalidNameRows = tasks
+        .map((task, index) => String(task?.task_name ?? '').trim() ? null : index + 1)
+        .filter(rowNumber => rowNumber !== null);
+    if (invalidNameRows.length) {
+        return res.status(400).json({
+            success: false,
+            code: 'INVALID_TASK_NAME',
+            message: `Task Name is required on imported row${invalidNameRows.length === 1 ? '' : 's'} ${invalidNameRows.join(', ')}.`,
+        });
+    }
+
     try {
         await requirePlanningUnlocked(projectId);
 
@@ -211,7 +230,7 @@ const bulkImportTasks = async (req, res) => {
             project_id:    parseInt(projectId),
             wbs_id:        idByCode.get(String(t.wbs_code || '').trim()),
             wbs_code:      t.wbs_code      || null,
-            task_name:     t.task_name,
+            task_name:     String(t.task_name).trim(),
             planned_start: t.planned_start || null,
             planned_end:   t.planned_end   || null,
             planned_cost:  parseFloat(t.planned_cost)  || 0,

@@ -69,7 +69,7 @@ function previewDependencyRemedy(project = {}, wbsNodes = [], sourceTasks = [], 
         successor.predecessors = successor.predecessors.filter(id => keyOf(id) !== keyOf(predecessorId));
     } else {
         const graph = graphFor(tasks);
-        if (graph.cycleKeys.length)
+        if (graph.cycleKeys.length || graph.selfLoopKeys.length)
             throw serviceError('Shift preview is unavailable while the plan contains a dependency cycle.', 422, 'DEPENDENCY_CYCLE');
 
         const affected = new Set([keyOf(successorId)]);

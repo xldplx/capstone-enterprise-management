@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toISODate, parseTask, validateRow } from './excelImportParse.js';
+import { autoDetectMapping, toISODate, parseTask, validateRow } from './excelImportParse.js';
 
 // Column order matches TASK_COLUMNS: name, wbs, cost, hours, start, end, weight
 const MAPPING = {
@@ -30,6 +30,18 @@ test('toISODate rejects serial numbers and free text', () => {
     assert.equal(toISODate(new Date('nope')), '');
 });
 
+test('toISODate rejects impossible calendar dates', () => {
+    assert.equal(toISODate('2026-02-31'), '');
+    assert.equal(toISODate('2026-13-01'), '');
+});
+
+test('auto mapping does not overwrite a field already mapped to column zero', () => {
+    assert.deepEqual(autoDetectMapping(['Task Name', 'Cost Description']), {
+        task_name: 0,
+        planned_cost: 1,
+    });
+});
+
 test('parseTask emits ISO dates for both Date cells and ISO strings', () => {
     const fromDates = parseTask(row(new Date(2026, 3, 1), new Date(2026, 3, 30)), MAPPING);
     assert.equal(fromDates.planned_start, '2026-04-01');
@@ -52,4 +64,10 @@ test('validateRow flags an unreadable date instead of letting it reach the datab
 
 test('validateRow still accepts empty optional dates', () => {
     assert.deepEqual(validateRow(row('', ''), MAPPING), []);
+});
+
+test('validateRow rejects locale-formatted weight text instead of importing zero', () => {
+    const errors = validateRow(row('2026-04-01', '2026-04-30').map((value, index) => index === 6 ? '0,5' : value), MAPPING);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /Weight must be a plain number/);
 });

@@ -103,6 +103,23 @@ function loadReadinessController(supabase) {
     return require(controllerPath);
 }
 
+function loadWbsController({ supabase, requirePlanningUnlocked = async () => {} }) {
+    const controllerPath = require.resolve('../controllers/wbsController');
+    installMock(require.resolve('../config/db'), supabase);
+    installMock(require.resolve('../services/planningLockService'), { requirePlanningUnlocked });
+    delete require.cache[controllerPath];
+    return require(controllerPath);
+}
+
+function loadProjectsController({ supabase, requirePlanningUnlocked = async () => {}, writeAudit = async () => {} }) {
+    const controllerPath = require.resolve('../controllers/projectsController');
+    installMock(require.resolve('../config/db'), supabase);
+    installMock(require.resolve('../services/planningLockService'), { requirePlanningUnlocked });
+    installMock(require.resolve('../controllers/auditController'), { writeAudit });
+    delete require.cache[controllerPath];
+    return require(controllerPath);
+}
+
 const project = {
     id: 1,
     project_name: 'Delivery',
@@ -205,6 +222,96 @@ test('planning task updates are rejected after lock while actual updates continu
     assert.equal(lockChecks, 1);
 });
 
+test('schedule_pct cannot change after the baseline is locked', async () => {
+    const lockedError = Object.assign(new Error('Planning locked.'), { statusCode: 409, code: 'BASELINE_LOCKED' });
+    const supabase = fakeSupabase({ projects: [{ ...project, schedule_pct: 0.25 }] });
+    const controller = loadProjectsController({
+        supabase,
+        requirePlanningUnlocked: async () => { throw lockedError; },
+    });
+    const response = responseRecorder();
+
+    await controller.updateProject({
+        params: { id: '1' }, body: { schedule_pct: 0.75 }, user: { username: 'pm' }, headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.body.code, 'BASELINE_LOCKED');
+    assert.equal(supabase.tables.projects[0].schedule_pct, 0.25);
+});
+
+test('schedule_pct input is rejected outside the 0-1 range', async () => {
+    const supabase = fakeSupabase({ projects: [{ ...project, schedule_pct: 0.25 }] });
+    const controller = loadProjectsController({ supabase });
+    const response = responseRecorder();
+
+    await controller.updateProject({
+        params: { id: '1' }, body: { schedule_pct: 1.5 }, user: { username: 'pm' }, headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'INVALID_SCHEDULE_PCT');
+    assert.equal(supabase.tables.projects[0].schedule_pct, 0.25);
+});
+
+test('task schedule progress compares Jakarta calendar days without a UTC offset', async () => {
+    const RealDate = global.Date;
+    global.Date = class extends RealDate {
+        constructor(...args) {
+            super(...(args.length ? args : ['2026-04-02T00:30:00+07:00']));
+        }
+    };
+
+    try {
+        const supabase = fakeSupabase({ tasks: [plannedTask({
+            planned_start: '2026-04-01',
+            planned_end: '2026-04-03',
+        })] });
+        const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+        const response = responseRecorder();
+
+        await controller.getTasksByProject({ params: { projectId: '1' } }, response);
+
+        assert.equal(response.body.data[0].schedule_pct, 0.5);
+    } finally {
+        global.Date = RealDate;
+    }
+});
+
+test('WBS creation rejects a parent from another project', async () => {
+    const foreignParent = { id: 20, project_id: 2, parent_id: null, wbs_code: '1', name: 'Foreign', level: 1 };
+    const supabase = fakeSupabase({ wbs: [foreignParent] });
+    const controller = loadWbsController({ supabase });
+    const response = responseRecorder();
+
+    await controller.createWbsNode({
+        params: { projectId: '1' },
+        body: { parent_id: 20, wbs_code: '1.1', name: 'Invalid child', level: 2 },
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'INVALID_WBS_PARENT');
+    assert.equal(supabase.tables.wbs.length, 1);
+});
+
+test('WBS deletion stops when the linked-task safety lookup fails', async () => {
+    const node = { id: 10, project_id: 1, parent_id: null, wbs_code: '1', name: 'Root', level: 1 };
+    const supabase = fakeSupabase({ wbs: [node], tasks: [] });
+    const realFrom = supabase.from.bind(supabase);
+    supabase.from = (table) => {
+        const query = realFrom(table);
+        if (table === 'tasks') query.execute = async () => ({ data: null, error: { message: 'lookup failed' } });
+        return query;
+    };
+    const controller = loadWbsController({ supabase });
+    const response = responseRecorder();
+
+    await controller.deleteWbsNode({ params: { projectId: '1', id: '10' } }, response);
+
+    assert.equal(response.statusCode, 500);
+    assert.equal(supabase.tables.wbs.length, 1);
+});
+
 // The three lock writes are not transactional. Ordering the baseline insert last
 // means a partial failure leaves the project unlocked and retryable, instead of
 // permanently locked with no unlock route.
@@ -272,6 +379,21 @@ test('bulk import rejects unknown wbs codes without inserting anything', async (
     assert.equal(response.statusCode, 400);
     assert.equal(response.body.code, 'UNKNOWN_WBS_CODE');
     assert.match(response.body.message, /9\.9/);
+    assert.equal(supabase.operations.some(operation => operation.action === 'insert'), false);
+});
+
+test('bulk import rejects a blank task name without inserting anything', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ wbs_code: '1.1', task_name: '   ', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'INVALID_TASK_NAME');
     assert.equal(supabase.operations.some(operation => operation.action === 'insert'), false);
 });
 

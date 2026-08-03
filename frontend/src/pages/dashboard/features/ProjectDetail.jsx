@@ -6,6 +6,7 @@ import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
 import { taskToRow } from '../../../utils/taskSchema';
 import { apiFetch } from '../../../utils/api';
 import { load, save } from '../../../utils/localStore';
+import { resolvePlanningLockState } from '../../../utils/planningLockState';
 import PlanningReadinessPanel from './PlanningReadinessPanel';
 
 // Recursive WBS node component
@@ -297,7 +298,7 @@ export default function ProjectDetail({ project, onBack }) {
             const fetchedTasks = taskRes.data || [];
             setTasks(fetchedTasks);
             setWbsNodes(wbsRes.data || []);
-            setIsLocked(fetchedTasks.some(t => t.is_baseline_locked));
+            setIsLocked(resolvePlanningLockState(fetchedTasks, baselineRes));
             // Prefer baseline metadata from the DB (name / who / when); fall back to local cache.
             if (baselineRes?.success && baselineRes.data) {
                 const b = baselineRes.data;
