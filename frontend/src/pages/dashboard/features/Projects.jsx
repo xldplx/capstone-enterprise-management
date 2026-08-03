@@ -7,7 +7,9 @@ import { isValidProjectCode } from '../../../utils/validators';
 import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
 import { recordAudit } from '../../../utils/auditLog';
 import ErrorState from '../../../components/ErrorState';
+import CurrencyInput from '../../../components/CurrencyInput';
 import { apiFetch } from '../../../utils/api';
+import { parseGroupedWholeNumber } from '../../../utils/numberFormat';
 
 // Status-driven top accent so the portfolio scans by health at a glance.
 const STATUS_ACCENT = {
@@ -102,7 +104,8 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
         if (!trimmedName) { setError('Project name is required.'); return; }
         if (!trimmedCode) { setError('Project code is required.'); return; }
         if (!isValidProjectCode(trimmedCode)) { setError('Project code must match PRJ-YYYY-NNN, e.g. PRJ-2026-004.'); return; }
-        if (parseFloat(form.total_budget) < 0) { setError('Budget cannot be negative.'); return; }
+        const totalBudget = parseGroupedWholeNumber(form.total_budget) ?? 0;
+        if (Number.isNaN(totalBudget)) { setError('Total Budget must be a valid whole number.'); return; }
         if (form.planned_end && form.planned_start && new Date(form.planned_end) < new Date(form.planned_start)) {
             setError('End date must be on or after start date.');
             return;
@@ -116,7 +119,7 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
                     ...form,
                     project_name: trimmedName,
                     project_code: trimmedCode,
-                    total_budget: parseFloat(form.total_budget) || 0,
+                    total_budget: totalBudget,
                 }),
             });
             if (!res.success) {
@@ -215,7 +218,7 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
                         { label: 'Total Projects', value: stats.total, color: 'text-slate-800', desc: 'Registered in database' },
                         { label: 'Active Projects', value: stats.active, color: 'text-emerald-700', desc: 'Under site execution' },
                         { label: 'On-Track (CPI ≥ 1)', value: stats.onTrack, color: 'text-emerald-600', desc: 'CPI performing healthy' },
-                        { label: 'Total Portfolio Budget', value: `IDR ${(stats.totalVal / 1e9).toFixed(1)}B`, color: 'text-rose-700', desc: 'Cumulative project values' }
+                        { label: 'Total Portfolio Budget (IDR)', value: formatCurrency(stats.totalVal), color: 'text-rose-700', desc: 'Cumulative project values' }
                     ].map((stat, idx) => (
                         <div key={idx} className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300">
                             <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">{stat.label}</h3>
@@ -366,7 +369,7 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
                                     </div>
                                     <div className="flex items-center gap-1.5 justify-end">
                                         <DollarSign className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                        <span className="font-semibold text-slate-500">{formatCurrency(project.total_budget)}</span>
+                                        <span className="font-semibold text-slate-500" title="Project Total Budget (IDR)">Budget (IDR): {formatCurrency(project.total_budget)}</span>
                                     </div>
                                 </div>
 
@@ -412,7 +415,7 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
 
                         {/* Error */}
                         {error && (
-                            <div className="p-3 mb-4 rounded-xl bg-red-50 border border-red-150 text-red-655 text-xs text-center font-bold uppercase animate-pulse">
+                            <div id="project-form-error" role="alert" className="p-3 mb-4 rounded-xl bg-red-50 border border-red-150 text-red-655 text-xs text-center font-bold uppercase animate-pulse">
                                 {error}
                             </div>
                         )}
@@ -488,12 +491,14 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
 
                             <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">Total Budget (IDR)</label>
-                                <input
-                                    type="number"
+                                <CurrencyInput
                                     value={form.total_budget}
-                                    onChange={(e) => setForm({ ...form, total_budget: e.target.value })}
+                                    onChange={(value) => setForm({ ...form, total_budget: value })}
+                                    onRejectedInput={setError}
                                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/5 transition-all text-slate-700 text-sm font-semibold"
                                     placeholder="0"
+                                    aria-describedby={error ? 'project-form-error' : undefined}
+                                    aria-invalid={Boolean(error)}
                                 />
                             </div>
 

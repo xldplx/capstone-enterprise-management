@@ -4,6 +4,8 @@ import { formatCurrency, formatDate } from '../../../utils/evmHelpers';
 import { INPUT_CLASS, INLINE_INPUT_CLASS, CARD_CLASS } from '../../../utils/uiConstants';
 import { apiFetch } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
+import CurrencyInput from '../../../components/CurrencyInput';
+import { parseGroupedWholeNumber } from '../../../utils/numberFormat';
 
 export default function DailyActuals() {
     const { t } = useTranslation();
@@ -38,7 +40,7 @@ export default function DailyActuals() {
 
     const updateActual = (taskId, field, value) => {
         if (field === 'photo') { setActuals(prev => ({ ...prev, [taskId]: { ...prev[taskId], [field]: value } })); return; }
-        let v = parseFloat(value);
+        let v = field === 'actual_cost' ? parseGroupedWholeNumber(value) : parseFloat(value);
         if (isNaN(v) || v < 0) v = 0;
         if (field === 'pct_complete' && v > 100) v = 100;
         setActuals(prev => ({ ...prev, [taskId]: { ...prev[taskId], [field]: v } }));
@@ -166,7 +168,7 @@ export default function DailyActuals() {
                                         ? <><Loader2 className="w-5 h-5 animate-spin" /> {t('daily.submitting')}</>
                                         : <><CheckCircle2 className="w-5 h-5" /> {hasAnyActuals ? t('daily.submitRecords') : t('daily.enterDataFirst')}</>}
                                 </button>
-                                {submitError && <div className="p-3 rounded-lg bg-red-50/80 border border-red-100 text-red-600 text-xs text-center font-bold uppercase">{submitError}</div>}
+                                {submitError && <div id="daily-actual-error" role="alert" className="p-3 rounded-lg bg-red-50/80 border border-red-100 text-red-600 text-xs text-center font-bold uppercase">{submitError}</div>}
                             </div>
                         )}
                     </div>
@@ -177,7 +179,7 @@ export default function DailyActuals() {
                                     <th className="px-8 py-5">{t('daily.taskDetails')}</th>
                                     <th className="px-6 py-5">{t('daily.budgetRef')}</th>
                                     <th className="px-6 py-5 text-emerald-600">{t('daily.actualHours')}</th>
-                                    <th className="px-6 py-5 text-emerald-600">{t('daily.actualCost')}</th>
+                                    <th className="px-6 py-5 text-emerald-600">{t('daily.actualCost')} (IDR)</th>
                                     <th className="px-6 py-5 text-emerald-600">{t('daily.percentDone')}</th>
                                     <th className="px-8 py-5 text-emerald-600">{t('daily.evidence')}</th>
                                 </tr>
@@ -201,12 +203,13 @@ export default function DailyActuals() {
                                                 placeholder="0" className={INLINE_INPUT_CLASS} />
                                         </td>
                                         <td className="px-6 py-6 w-48">
-                                            <div className="relative group">
-                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-300 group-focus-within:text-emerald-500 transition-colors">Rp</span>
-                                                <input type="number" min="0" value={actuals[task.id]?.actual_cost || ''}
-                                                    onChange={e => updateActual(task.id, 'actual_cost', e.target.value)}
-                                                    placeholder="0" className={`${INLINE_INPUT_CLASS} pl-8`} />
-                                            </div>
+                                            <CurrencyInput value={actuals[task.id]?.actual_cost || ''}
+                                                onChange={value => updateActual(task.id, 'actual_cost', value)}
+                                                onRejectedInput={setSubmitError}
+                                                placeholder="0" aria-label={`${task.task_name} actual cost in IDR`}
+                                                aria-describedby={submitError ? 'daily-actual-error' : undefined}
+                                                aria-invalid={Boolean(submitError)}
+                                                className={INLINE_INPUT_CLASS} />
                                         </td>
                                         <td className="px-6 py-6 w-32">
                                             <div className="flex items-center gap-2">

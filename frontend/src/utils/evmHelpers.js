@@ -1,3 +1,5 @@
+import { formatWholeNumber } from './numberFormat';
+
 /**
  * Shared EVM helpers — bilingual labels tanpa import i18n
  * (membaca localStorage langsung agar tidak ada circular dependency)
@@ -50,7 +52,7 @@ export function varianceColor(val) {
 }
 
 export function formatCurrency(v) {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(v);
+    return formatWholeNumber(v);
 }
 
 export function formatDate(d) {

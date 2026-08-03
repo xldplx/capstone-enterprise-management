@@ -33,8 +33,9 @@ export default function Alerts({ onNavigate }) {
     const [loadingRisks, setLoadingRisks]         = useState(false);
 
     useEffect(() => {
-        apiFetch('/alerts/raw').then(r => {
-            if (r.success) { setProjects(r.projects || []); setAllTasks(r.tasks || []); }
+        Promise.all([apiFetch('/projects'), apiFetch('/alerts/raw')]).then(([projectResponse, raw]) => {
+            if (projectResponse.success) setProjects(projectResponse.data || []);
+            if (raw.success) setAllTasks(raw.tasks || []);
         }).catch(console.error);
         apiFetch('/alerts/thresholds').then(r => {
             if (r.success && r.data) setThresholds({

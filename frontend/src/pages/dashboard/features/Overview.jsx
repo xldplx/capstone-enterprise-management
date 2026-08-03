@@ -6,8 +6,9 @@ import { generateSCurveData } from '../../../utils/cpmHelpers';
 import { STATUS_STYLES, CARD_CLASS } from '../../../utils/uiConstants';
 import { apiFetch, aiApi } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
+import { formatCompactWholeNumber } from '../../../utils/numberFormat';
 
-const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'];
+const COLORS = ['#10b981', '#3b82f6', '#94a3b8', '#f59e0b'];
 
 function formatMarkdownText(text) {
     if (!text) return '';
@@ -21,9 +22,7 @@ function formatMarkdownText(text) {
 }
 
 const formatYAxis = (value) => {
-    if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
-    if (value >= 1e3) return `$${(value / 1e3).toFixed(0)}K`;
-    return `$${value}`;
+    return formatCompactWholeNumber(value);
 };
 
 const formatXAxis = (dateStr) => {
@@ -72,9 +71,10 @@ export default function Overview({ onNavigate }) {
 
     useEffect(() => {
         setLoading(true);
-        Promise.all([apiFetch('/alerts/raw'), apiFetch('/alerts/thresholds')])
-            .then(([raw, thresh]) => {
-                if (raw.success) { setProjects(raw.projects || []); setAllTasks(raw.tasks || []); }
+        Promise.all([apiFetch('/projects'), apiFetch('/alerts/raw'), apiFetch('/alerts/thresholds')])
+            .then(([projectResponse, raw, thresh]) => {
+                if (projectResponse.success) setProjects(projectResponse.data || []);
+                if (raw.success) setAllTasks(raw.tasks || []);
                 if (thresh.success && thresh.data) setThresholds(thresh.data);
             })
             .catch(console.error)
@@ -103,13 +103,14 @@ export default function Overview({ onNavigate }) {
         return { ...proj, ...computeEvm(tasks, proj.schedule_pct) };
     }), [projects, allTasks]);
 
-    const { totalBAC, portfolioCPI, portfolioSPI } = useMemo(() => {
+    const { portfolioBudget, totalBAC, portfolioCPI, portfolioSPI } = useMemo(() => {
         const tEV = projectMetrics.reduce((s, p) => s + p.EV, 0);
         const tAC = projectMetrics.reduce((s, p) => s + p.AC, 0);
         const tPV = projectMetrics.reduce((s, p) => s + p.PV, 0);
         const tBAC = projectMetrics.reduce((s, p) => s + p.BAC, 0);
-        return { totalBAC: tBAC, portfolioCPI: tAC > 0 ? tEV / tAC : null, portfolioSPI: tPV > 0 ? tEV / tPV : null };
-    }, [projectMetrics]);
+        const budget = projects.reduce((sum, project) => sum + (Number(project.total_budget) || 0), 0);
+        return { portfolioBudget: budget, totalBAC: tBAC, portfolioCPI: tAC > 0 ? tEV / tAC : null, portfolioSPI: tPV > 0 ? tEV / tPV : null };
+    }, [projectMetrics, projects]);
 
     const rawSCurveData = useMemo(() => {
         const dated = projects.filter(p => p.planned_start && p.planned_end);
@@ -133,7 +134,7 @@ export default function Overview({ onNavigate }) {
 
     const statusCounts = useMemo(() => {
         const counts = { active: 0, planning: 0, completed: 0, on_hold: 0 };
-        projects.forEach(p => { if (counts[p.status] !== undefined) counts[p.status]++; });
+        projects.forEach(p => { const status = p.status || 'planning'; if (counts[status] !== undefined) counts[status]++; });
         return counts;
     }, [projects]);
 
@@ -248,11 +249,11 @@ export default function Overview({ onNavigate }) {
                     <div className="p-3 bg-slate-50 text-slate-500 rounded-xl border border-slate-200 shadow-inner w-fit mb-4 relative z-10">
                         <Briefcase className="w-5 h-5" />
                     </div>
-                    <h3 className="text-slate-400 text-[10px] font-bold uppercase tracking-wider relative z-10">{t('overview.portfolioBudget')}</h3>
-                    <p className="text-2xl font-extrabold text-slate-800 tracking-tight mt-1 relative z-10">{formatCurrency(totalBAC)}</p>
+                    <h3 className="text-slate-400 text-[10px] font-bold uppercase tracking-wider relative z-10">{t('overview.portfolioBudget')} (IDR)</h3>
+                    <p className="text-2xl font-extrabold text-slate-800 tracking-tight mt-1 relative z-10">{formatCurrency(portfolioBudget)}</p>
                     <div className="mt-4 pt-3 border-t border-slate-50 flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-tight relative z-10">
-                        <span>{t('overview.totalBac')}</span>
-                        <span className="text-slate-500">100%</span>
+                        <span>Project totals</span>
+                        <span className="text-slate-500" title="Task planned-cost baseline (BAC)">BAC {formatCompactWholeNumber(totalBAC)}</span>
                     </div>
                 </div>
 
@@ -270,6 +271,12 @@ export default function Overview({ onNavigate }) {
                         </span>
                         <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100/60">
                             {statusCounts.planning} {t('status.planning')}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-600 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-200/60">
+                            {statusCounts.completed} {t('status.completed')}
+                        </span>
+                        <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-100/60">
+                            {statusCounts.on_hold} {t('status.onHold')}
                         </span>
                     </div>
                 </div>
@@ -376,7 +383,7 @@ export default function Overview({ onNavigate }) {
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                             <XAxis dataKey="date" tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }} tickLine={false} axisLine={false} tickFormatter={formatXAxis} />
-                            <YAxis tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }} tickLine={false} axisLine={false} tickFormatter={formatYAxis} />
+                            <YAxis tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }} tickLine={false} axisLine={false} tickFormatter={formatYAxis} label={{ value: 'IDR', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 9 }} />
                             <Tooltip content={<OverviewTooltip />} />
                             <Area type="monotone" dataKey="PV" name={t('overview.planned')} stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" fill="transparent" />
                             <Area type="monotone" dataKey="EV" name={t('overview.earned')} stroke="#10b981" strokeWidth={3} fill="url(#colorEV)" />
@@ -427,7 +434,7 @@ export default function Overview({ onNavigate }) {
                                                 <div className="flex flex-wrap items-center gap-2 mt-1.5">
                                                     <code className="text-[8px] text-slate-500 bg-slate-50 border border-slate-200/60 px-1.5 py-0.5 rounded uppercase tracking-wider font-mono leading-none">{p.project_code}</code>
                                                     <span className="text-[9px] text-slate-400 font-medium">
-                                                        Budget: <span className="font-extrabold text-slate-600">{formatCurrency(p.total_budget || p.BAC)}</span>
+                                                        Budget (IDR): <span className="font-extrabold text-slate-600">{formatCurrency(p.total_budget)}</span>
                                                     </span>
                                                 </div>
                                             </td>
@@ -497,8 +504,8 @@ export default function Overview({ onNavigate }) {
                         {[
                             { color: '#10b981', count: statusCounts.active, label: t('status.active'), bg: 'bg-emerald-500' },
                             { color: '#3b82f6', count: statusCounts.planning, label: t('status.planning'), bg: 'bg-blue-500' },
-                            { color: '#f59e0b', count: statusCounts.completed, label: t('status.completed'), bg: 'bg-amber-500' },
-                            { color: '#ef4444', count: statusCounts.on_hold, label: t('status.onHold'), bg: 'bg-rose-500' },
+                            { color: '#94a3b8', count: statusCounts.completed, label: t('status.completed'), bg: 'bg-slate-400' },
+                            { color: '#f59e0b', count: statusCounts.on_hold, label: t('status.onHold'), bg: 'bg-amber-500' },
                         ].map(({ color, count, label, bg }) => {
                             const pct = projects.length > 0 ? (count / projects.length) * 100 : 0;
                             return (
