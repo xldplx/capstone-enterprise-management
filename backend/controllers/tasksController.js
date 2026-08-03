@@ -163,6 +163,27 @@ const deleteTask = async (req, res) => {
     }
 };
 
+// Imported rows carry wbs_code (a human string), but readiness validates wbs_id.
+// Resolve one to the other, or every imported task lands unlinked and trips the
+// MISSING_WBS blocker, making the baseline permanently unlockable.
+// Returns { idByCode, unknownCodes } — or { error } if the lookup itself failed.
+async function resolveWbsIdsByCode(projectId, tasks) {
+    const { data: wbsNodes, error } = await supabase
+        .from('wbs').select('id, wbs_code').eq('project_id', parseInt(projectId));
+    if (error) return { error };
+
+    // Trim both sides: a node saved as "1.1 " must still match a sheet cell of "1.1".
+    const idByCode = new Map((wbsNodes || [])
+        .filter(node => node.wbs_code != null && String(node.wbs_code).trim() !== '')
+        .map(node => [String(node.wbs_code).trim(), node.id]));
+
+    const unknownCodes = [...new Set(tasks
+        .map(task => String(task.wbs_code || '').trim())
+        .filter(code => !idByCode.has(code)))];
+
+    return { idByCode, unknownCodes };
+}
+
 // ── POST /api/projects/:projectId/tasks/import ────────────────────────────────
 const bulkImportTasks = async (req, res) => {
     const { projectId } = req.params;
@@ -174,20 +195,8 @@ const bulkImportTasks = async (req, res) => {
     try {
         await requirePlanningUnlocked(projectId);
 
-        // Imported rows carry wbs_code (a human string), but readiness validates
-        // wbs_id. Resolve here or every imported task lands unlinked and trips the
-        // MISSING_WBS blocker, making the baseline permanently unlockable.
-        const { data: wbsNodes, error: wbsError } = await supabase
-            .from('wbs').select('id, wbs_code').eq('project_id', parseInt(projectId));
+        const { idByCode, unknownCodes, error: wbsError } = await resolveWbsIdsByCode(projectId, tasks);
         if (wbsError) return res.status(500).json({ success: false, message: wbsError.message });
-
-        // Trim both sides: a node saved as "1.1 " must still match a sheet cell of "1.1".
-        const wbsIdByCode = new Map((wbsNodes || [])
-            .filter(node => node.wbs_code != null && String(node.wbs_code).trim() !== '')
-            .map(node => [String(node.wbs_code).trim(), node.id]));
-        const unknownCodes = [...new Set(tasks
-            .map(t => String(t.wbs_code || '').trim())
-            .filter(code => !wbsIdByCode.has(code)))];
 
         // Fail the whole import rather than silently inserting unlinked tasks.
         if (unknownCodes.length) {
@@ -200,7 +209,7 @@ const bulkImportTasks = async (req, res) => {
 
         const rows = tasks.map(t => ({
             project_id:    parseInt(projectId),
-            wbs_id:        wbsIdByCode.get(String(t.wbs_code || '').trim()),
+            wbs_id:        idByCode.get(String(t.wbs_code || '').trim()),
             wbs_code:      t.wbs_code      || null,
             task_name:     t.task_name,
             planned_start: t.planned_start || null,
