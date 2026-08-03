@@ -205,6 +205,62 @@ test('planning task updates are rejected after lock while actual updates continu
     assert.equal(lockChecks, 1);
 });
 
+test('bulk import resolves wbs_code to wbs_id so imported tasks are linked', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ wbs_code: '1.1', task_name: 'Imported', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, response);
+
+    assert.equal(response.statusCode, 201);
+    const insert = supabase.operations.find(operation => operation.table === 'tasks' && operation.action === 'insert');
+    assert.equal(insert.payload[0].wbs_id, 10);
+    assert.equal(insert.payload[0].wbs_code, '1.1');
+});
+
+test('bulk import rejects unknown wbs codes without inserting anything', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [
+            { wbs_code: '1.1', task_name: 'Good', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+            { wbs_code: '9.9', task_name: 'Orphan', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+        ] },
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'UNKNOWN_WBS_CODE');
+    assert.match(response.body.message, /9\.9/);
+    assert.equal(supabase.operations.some(operation => operation.action === 'insert'), false);
+});
+
+// Guards the whole demo path: import -> readiness -> lock. Before the wbs_id fix
+// every imported task raised MISSING_WBS and the baseline could never be locked.
+test('bulk-imported tasks pass readiness without MISSING_WBS', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [
+            { wbs_code: '1.1', task_name: 'A', planned_start: '2026-01-01', planned_end: '2026-01-05', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+            { wbs_code: '1.1', task_name: 'B', planned_start: '2026-01-06', planned_end: '2026-01-10', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+        ] },
+    }, responseRecorder());
+
+    const { evaluatePlanReadiness } = require('../services/planningReadinessService');
+    const report = evaluatePlanReadiness(project, wbs, supabase.tables.tasks);
+
+    assert.equal(report.findings.some(finding => finding.code === 'MISSING_WBS'), false);
+    assert.equal(report.summary.blockers, 0);
+});
+
 test('dependency preview reads project data without insert, update or delete', async () => {
     const tasks = [
         plannedTask({ id: 1, weight: 0.5, planned_end: '2026-01-08' }),

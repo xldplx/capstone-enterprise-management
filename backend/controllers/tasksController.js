@@ -173,8 +173,31 @@ const bulkImportTasks = async (req, res) => {
 
     try {
         await requirePlanningUnlocked(projectId);
+
+        // Imported rows carry wbs_code (a human string), but readiness validates
+        // wbs_id. Resolve here or every imported task lands unlinked and trips the
+        // MISSING_WBS blocker, making the baseline permanently unlockable.
+        const { data: wbsNodes, error: wbsError } = await supabase
+            .from('wbs').select('id, wbs_code').eq('project_id', parseInt(projectId));
+        if (wbsError) return res.status(500).json({ success: false, message: wbsError.message });
+
+        const wbsIdByCode = new Map((wbsNodes || []).map(node => [String(node.wbs_code), node.id]));
+        const unknownCodes = [...new Set(tasks
+            .map(t => String(t.wbs_code || '').trim())
+            .filter(code => !wbsIdByCode.has(code)))];
+
+        // Fail the whole import rather than silently inserting unlinked tasks.
+        if (unknownCodes.length) {
+            return res.status(400).json({
+                success: false,
+                code: 'UNKNOWN_WBS_CODE',
+                message: `These WBS codes do not exist in this project: ${unknownCodes.join(', ')}. Create the WBS nodes first, or correct the spreadsheet.`,
+            });
+        }
+
         const rows = tasks.map(t => ({
             project_id:    parseInt(projectId),
+            wbs_id:        wbsIdByCode.get(String(t.wbs_code || '').trim()),
             wbs_code:      t.wbs_code      || null,
             task_name:     t.task_name,
             planned_start: t.planned_start || null,

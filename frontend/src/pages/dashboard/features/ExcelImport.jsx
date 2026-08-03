@@ -5,90 +5,7 @@ import { INPUT_CLASS } from '../../../utils/uiConstants';
 import { recordAudit } from '../../../utils/auditLog';
 import { TASK_COLUMNS as TASK_FIELDS, TASK_TEMPLATE_ROWS } from '../../../utils/taskSchema';
 import { apiFetch } from '../../../utils/api';
-
-function autoDetectMapping(headers) {
-    const mapping = {};
-    const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-    const patterns = {
-        task_name:     ['taskname', 'task', 'name', 'activity', 'description'],
-        wbs_code:      ['wbs', 'wbscode', 'code'],
-        planned_cost:  ['plannedcost', 'cost', 'budget', 'estimatedcost'],
-        planned_hours: ['plannedhours', 'hours', 'manhours', 'laborhours'],
-        planned_start: ['plannedstart', 'start', 'startdate', 'begin'],
-        planned_end:   ['plannedend', 'end', 'enddate', 'finish'],
-        weight:        ['weight', 'weighting', 'proportion'],
-    };
-
-    headers.forEach((header, index) => {
-        const norm = normalize(header);
-        for (const [field, keywords] of Object.entries(patterns)) {
-            if (!mapping[field] && keywords.some(kw => norm.includes(kw))) {
-                mapping[field] = index;
-            }
-        }
-    });
-
-    return mapping;
-}
-
-// A numeric cell that arrives as a formatted string (e.g. "1,000.50") would be
-// silently truncated by parseFloat ("1,000.50" → 1). Reject those explicitly so
-// the user fixes the source cell instead of importing a corrupt value.
-function numericFieldError(raw, label) {
-    if (raw === undefined || raw === null || String(raw).trim() === '') return `${label} is required`;
-    const s = String(raw).trim();
-    if (typeof raw === 'string' && !/^-?\d+(\.\d+)?$/.test(s)) {
-        return `${label} must be a plain number (remove thousands separators or text)`;
-    }
-    const n = parseFloat(s);
-    if (isNaN(n) || n <= 0) return `${label} must be greater than 0`;
-    return null;
-}
-
-function validateRow(row, mapping) {
-    const errors = [];
-    const getValue = (field) => {
-        const idx = mapping[field];
-        return idx !== undefined && idx !== '' ? row[idx] : undefined;
-    };
-
-    // Required string fields
-    if (!getValue('task_name')?.toString().trim()) errors.push('Task Name is required');
-    if (!getValue('wbs_code')?.toString().trim()) errors.push('WBS Code is required');
-
-    // Required number fields — reject formatted/locale strings, not just <= 0
-    const costErr = numericFieldError(getValue('planned_cost'), 'Planned Cost');
-    if (costErr) errors.push(costErr);
-    const hoursErr = numericFieldError(getValue('planned_hours'), 'Planned Hours');
-    if (hoursErr) errors.push(hoursErr);
-
-    // Optional: weight
-    const weight = getValue('weight');
-    if (weight !== undefined && weight !== '' && weight !== null) {
-        const w = parseFloat(weight);
-        if (isNaN(w) || w < 0 || w > 1) errors.push('Weight must be 0–1');
-    }
-
-    return errors;
-}
-
-function parseTask(row, mapping) {
-    const getValue = (field) => {
-        const idx = mapping[field];
-        return idx !== undefined && idx !== '' ? row[idx] : undefined;
-    };
-
-    return {
-        task_name:     getValue('task_name')?.toString().trim() || '',
-        wbs_code:      getValue('wbs_code')?.toString().trim()  || '',
-        planned_cost:  parseFloat(getValue('planned_cost'))  || 0,
-        planned_hours: parseFloat(getValue('planned_hours')) || 0,
-        planned_start: getValue('planned_start')?.toString() || '',
-        planned_end:   getValue('planned_end')?.toString()   || '',
-        weight:        parseFloat(getValue('weight'))        || 0,
-    };
-}
+import { autoDetectMapping, validateRow, parseTask } from '../../../utils/excelImportParse';
 
 export default function ExcelImport() {
     const userRole  = localStorage.getItem('userRole');
@@ -136,7 +53,9 @@ export default function ExcelImport() {
         const reader = new FileReader();
         reader.onload = (e) => {
             const data = new Uint8Array(e.target.result);
-            const wb   = XLSX.read(data, { type: 'array' });
+            // cellDates keeps real Excel date cells as Date objects instead of
+            // raw serial numbers; toISODate (excelImportParse) converts them.
+            const wb   = XLSX.read(data, { type: 'array', cellDates: true });
             const sheet = wb.Sheets[wb.SheetNames[0]];
             const raw   = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
