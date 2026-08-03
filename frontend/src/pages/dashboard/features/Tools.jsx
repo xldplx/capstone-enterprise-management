@@ -6,6 +6,7 @@ import {
 import { apiFetch } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
 import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
+import RowActionsMenu from '../../../components/RowActionsMenu';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const fmtDate  = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
@@ -210,20 +211,6 @@ export default function Tools() {
                 </div>
             )}
 
-            {/* ACTIONS */}
-            <div className="flex justify-end gap-3 mb-6">
-                <button onClick={handleExport} disabled={tools.length === 0}
-                    className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-6 py-2.5 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <Download className="w-5 h-5" /> {t('common.export')}
-                </button>
-                {canEdit && (
-                    <button onClick={openAddModal}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold shadow-lg shadow-emerald-200 transition-all transform hover:-translate-y-0.5 flex items-center gap-2">
-                        <Plus className="w-5 h-5" /> {t('tools.addTool')}
-                    </button>
-                )}
-            </div>
-
             {/* KPI */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
                 {[
@@ -241,8 +228,8 @@ export default function Tools() {
             </div>
 
             {/* FILTERS */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center gap-2 bg-white/40 backdrop-blur-md p-1.5 rounded-2xl border border-slate-200/50 shadow-sm">
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4" aria-label="Tools table controls">
+                <div className="flex items-center gap-2 overflow-x-auto p-1">
                     {STATUS_FILTERS.map(f => (
                         <button key={f} onClick={() => setStatusFilter(f)}
                             className={`px-5 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${
@@ -251,11 +238,19 @@ export default function Tools() {
                         </button>
                     ))}
                 </div>
-                <div className="relative">
-                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input type="text" placeholder={t('tools.searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)}
-                        className="text-sm bg-white border border-slate-200 rounded-xl pl-9 pr-9 py-2 outline-none focus:border-emerald-500 transition-colors min-w-[240px] shadow-sm" />
-                    {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="w-3.5 h-3.5" /></button>}
+                <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-xs font-semibold text-slate-400">{filtered.length} results</span>
+                    <div className="relative flex-1 min-w-56">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input type="search" aria-label="Search tools" placeholder={t('tools.searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)}
+                            className="w-full text-sm bg-white border border-slate-200 rounded-xl pl-9 pr-9 py-2.5 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-colors" />
+                        {search && <button aria-label="Clear tool search" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X className="w-3.5 h-3.5" /></button>}
+                    </div>
+                    <button onClick={handleExport} disabled={tools.length === 0}
+                        className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2 disabled:opacity-50">
+                        <Download className="w-4 h-4" /> {t('common.export')}
+                    </button>
+                    {canEdit && <button onClick={openAddModal} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center gap-2"><Plus className="w-4 h-4" /> {t('tools.addTool')}</button>}
                 </div>
             </div>
 
@@ -270,15 +265,16 @@ export default function Tools() {
                     <>
                         <div className="overflow-x-auto">
                             <table className="w-full text-left border-collapse">
+                                <caption className="sr-only">Tools inventory, assignments, condition, and available actions</caption>
                                 <thead>
                                     <tr className="bg-slate-50/80 text-xs uppercase tracking-wider text-slate-500 font-bold">
-                                        <th className="px-6 py-4">{t('common.name')}</th>
-                                        <th className="px-6 py-4">{t('tools.category')}</th>
-                                        <th className="px-6 py-4">{t('tools.condition')}</th>
-                                        <th className="px-6 py-4">{t('tools.assignedTo')}</th>
-                                        <th className="px-6 py-4">{t('tools.checkoutDate')}</th>
-                                        <th className="px-6 py-4">{t('tools.return')}</th>
-                                        <th className="px-6 py-4 text-right">{t('common.actions')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('common.name')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('tools.category')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('tools.condition')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('tools.assignedTo')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('tools.checkoutDate')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('tools.return')}</th>
+                                        <th scope="col" className="px-6 py-4 text-right">{t('common.actions')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="text-sm font-medium text-slate-600 divide-y divide-slate-50">
@@ -298,40 +294,29 @@ export default function Tools() {
                                                 <td className="px-6 py-4 text-slate-400 text-xs">{fmtDate(tool.checkout_date)}</td>
                                                 <td className="px-6 py-4 text-slate-400 text-xs">{fmtDate(tool.return_date)}</td>
                                                 <td className="px-6 py-4">
-                                                    <div className="flex items-center justify-end gap-1">
-                                                        {/* Edit */}
-                                                        {canEdit && (
-                                                            <button onClick={() => openEditModal(tool)} title={t('common.edit')}
-                                                                className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors">
-                                                                <Pencil className="w-4 h-4" />
-                                                            </button>
-                                                        )}
-                                                        {/* Checkout / Return */}
+                                                    <div className="flex items-center justify-end gap-2 min-w-max">
                                                         {canEdit && !isNeedsRepair && (
                                                             isCheckedOut ? (
-                                                                <button onClick={() => handleReturn(tool)} title={t('tools.return')}
-                                                                    className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-                                                                    <RotateCcw className="w-4 h-4" />
+                                                                <button onClick={() => handleReturn(tool)}
+                                                                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-colors">
+                                                                    <RotateCcw className="w-3.5 h-3.5" /> Return tool
                                                                 </button>
                                                             ) : (
-                                                                <button onClick={() => openCheckoutModal(tool)} title={t('tools.checkOut')}
-                                                                    className="text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 hover:bg-emerald-100 transition-colors">
-                                                                    {t('tools.checkOut')}
+                                                                <button onClick={() => openCheckoutModal(tool)}
+                                                                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors">
+                                                                    <Wrench className="w-3.5 h-3.5" /> Check out
                                                                 </button>
                                                             )
                                                         )}
                                                         {isNeedsRepair && (
-                                                            <span className="text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg bg-slate-50 text-slate-400 border border-slate-100">
+                                                            <span className="text-[10px] font-bold uppercase px-3 py-2 rounded-lg bg-slate-50 text-slate-500 border border-slate-200">
                                                                 {t('tools.inRepair')}
                                                             </span>
                                                         )}
-                                                        {/* Delete */}
-                                                        {canDelete && (
-                                                            <button onClick={() => { setDeleteError(''); setDeletingId(tool.id); }} title={t('common.delete')}
-                                                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors">
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </button>
-                                                        )}
+                                                        <RowActionsMenu label={`More actions for ${tool.name}`} actions={[
+                                                            ...(canEdit ? [{ label: t('common.edit'), icon: Pencil, onSelect: () => openEditModal(tool) }] : []),
+                                                            ...(canDelete ? [{ label: t('common.delete'), icon: Trash2, destructive: true, onSelect: () => { setDeleteError(''); setDeletingId(tool.id); } }] : []),
+                                                        ]} />
                                                     </div>
                                                 </td>
                                             </tr>
