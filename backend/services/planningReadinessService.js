@@ -63,6 +63,14 @@ function makeFinding({ code, severity, title, explanation, taskIds = [], wbsIds 
     };
 }
 
+// A task listing the same predecessor twice describes one relationship, not two.
+// Dedupe centrally so the graph, the edge findings and the connectivity check all
+// agree — otherwise a repeated id double-counts blockers in the summary.
+function predecessorsOf(task) {
+    const list = Array.isArray(task?.predecessors) ? task.predecessors : [];
+    return [...new Map(list.map(id => [keyOf(id), id])).values()];
+}
+
 function graphFor(tasks) {
     const taskMap = new Map(tasks.map(task => [keyOf(task.id), task]));
     const successors = new Map(tasks.map(task => [keyOf(task.id), []]));
@@ -70,7 +78,7 @@ function graphFor(tasks) {
 
     for (const task of tasks) {
         const successorKey = keyOf(task.id);
-        for (const predecessorId of Array.isArray(task.predecessors) ? task.predecessors : []) {
+        for (const predecessorId of predecessorsOf(task)) {
             const predecessorKey = keyOf(predecessorId);
             if (!taskMap.has(predecessorKey) || predecessorKey === successorKey) continue;
             successors.get(predecessorKey).push(successorKey);
@@ -168,6 +176,20 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
         }
     }
 
+    // The total-weight check alone lets a plan through when out-of-range weights
+    // cancel out (-0.5 and 1.5 sum to exactly 1.0). Bound each task as well.
+    const outOfRangeWeights = (tasks || []).filter(task => {
+        const weight = Number(task.weight) || 0;
+        return weight < 0 || weight > 1;
+    });
+    if (outOfRangeWeights.length) {
+        findings.push(makeFinding({
+            code: 'WEIGHT_OUT_OF_RANGE', severity: 'blocker', title: 'Task weights are outside 0–100%',
+            explanation: `${outOfRangeWeights.length} task${outOfRangeWeights.length === 1 ? '' : 's'} have a weight below 0% or above 100%.`,
+            taskIds: outOfRangeWeights.map(task => task.id),
+        }));
+    }
+
     const totalWeight = (tasks || []).reduce((sum, task) => sum + (Number(task.weight) || 0), 0);
     if (tasks?.length && (totalWeight < 0.999 || totalWeight > 1.001)) {
         findings.push(makeFinding({
@@ -179,7 +201,7 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
 
     for (const task of tasks || []) {
         const successorKey = keyOf(task.id);
-        for (const predecessorId of Array.isArray(task.predecessors) ? task.predecessors : []) {
+        for (const predecessorId of predecessorsOf(task)) {
             const predecessorKey = keyOf(predecessorId);
             if (predecessorKey === successorKey) {
                 findings.push(makeFinding({
@@ -220,9 +242,8 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
         }));
     }
 
-    const validEdgeCount = (tasks || []).reduce((count, task) => count + (Array.isArray(task.predecessors)
-        ? task.predecessors.filter(id => taskMap.has(keyOf(id)) && keyOf(id) !== keyOf(task.id)).length
-        : 0), 0);
+    const validEdgeCount = (tasks || []).reduce((count, task) => count
+        + predecessorsOf(task).filter(id => taskMap.has(keyOf(id)) && keyOf(id) !== keyOf(task.id)).length, 0);
     if ((tasks || []).length > 1 && validEdgeCount === 0) {
         findings.push(makeFinding({
             code: 'NO_DEPENDENCY_NETWORK', severity: 'warning', title: 'Plan has no dependency network',
@@ -232,7 +253,7 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
     } else if ((tasks || []).length > 1) {
         const connected = new Set();
         for (const task of tasks) {
-            for (const predecessorId of Array.isArray(task.predecessors) ? task.predecessors : []) {
+            for (const predecessorId of predecessorsOf(task)) {
                 if (taskMap.has(keyOf(predecessorId)) && keyOf(predecessorId) !== keyOf(task.id)) {
                     connected.add(keyOf(task.id));
                     connected.add(keyOf(predecessorId));
