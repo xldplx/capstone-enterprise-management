@@ -642,6 +642,7 @@ export default function ProjectDetail({ project, onBack }) {
             'Level':    n.level,
             'Parent':   wbsNodes.find(p => p.id === n.parent_id)?.wbs_code || '',
         }));
+
         exportWorkbook(exportFilename('Tasks', project.project_code), [
             { name: 'Tasks', rows: taskRows },
             { name: 'WBS',   rows: wbsRows },
@@ -649,27 +650,48 @@ export default function ProjectDetail({ project, onBack }) {
     };
 
     return (
+
         <div className="space-y-6">
             <div className="sr-only" aria-live="polite">
                 {lockingBaseline ? 'Baseline lock is being submitted.' : isLocked ? 'Baseline locked successfully.' : lockError}
             </div>
 
-            {/* HEADER */}
-            <div className="flex flex-col gap-5">
-                <div className="flex items-start justify-between gap-4">
+            {/* HEADER & ACTION DECK */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
+                
+                {/* Breadcrumbs & Primary Title */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="flex items-start gap-4">
-                        <button onClick={onBack} aria-label="Go back to projects"
-                            className="mt-1 p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer">
+                        <button 
+                            onClick={onBack} 
+                            aria-label="Go back to projects"
+                            className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-all shadow-sm hover:scale-105 active:scale-95 shrink-0 cursor-pointer"
+                        >
                             <ArrowLeft className="w-5 h-5" />
                         </button>
                         <div>
+                            <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                                <span>Projects</span>
+                                <span>/</span>
+                                <span className="font-mono text-emerald-600">{project.project_code}</span>
+                            </div>
                             <div className="flex items-center gap-3 flex-wrap">
-                                <h2 className="text-3xl font-bold text-slate-800 tracking-tight">{project.project_name}</h2>
-                                <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-lg border ${STATUS_STYLES[currentStatus] || STATUS_STYLES.planning}`}>
+                                <h2 className="text-2xl xl:text-3xl font-black text-slate-900 tracking-tight leading-none">
+                                    {project.project_name}
+                                </h2>
+                                <span className={`text-[10px] font-bold uppercase px-3 py-1 rounded-xl border shadow-sm ${STATUS_STYLES[currentStatus] || STATUS_STYLES.planning}`}>
                                     {currentStatus.replace('_', ' ')}
                                 </span>
+                                {isLocked && baseline && (
+                                    <span 
+                                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl font-bold text-xs shadow-sm"
+                                        title={`Locked by ${baseline.lockedBy || 'PM'} on ${baseline.lockedAt ? baseline.lockedAt.toLocaleDateString('en-GB') : 'Baseline lock'}`}
+                                    >
+                                        <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                        <span>{baseline.name}</span>
+                                    </span>
+                                )}
                             </div>
-                            <p className="text-slate-400 font-mono text-xs mt-1">{project.project_code}</p>
                         </div>
                     </div>
 
@@ -677,14 +699,14 @@ export default function ProjectDetail({ project, onBack }) {
                         <button
                             onClick={handleExport}
                             disabled={tasks.length === 0 && wbsNodes.length === 0}
-                            className="text-sm font-semibold px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 border shadow-sm text-emerald-600 bg-emerald-50 border-emerald-100 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 hover:shadow-lg hover:shadow-emerald-200 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                            className="text-xs font-bold px-4 py-3 rounded-2xl transition-all flex items-center gap-2 border shadow-sm text-emerald-700 bg-emerald-50/80 border-emerald-200 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 hover:shadow-lg hover:shadow-emerald-950/20 active:scale-95 disabled:opacity-40 cursor-pointer"
                         >
-                            <Download className="w-4 h-4" /> Export
+                            <Download className="w-4 h-4" /> Export (.xlsx)
                         </button>
                         {canEdit && (
                             isLocked ? (
-                                <div className="flex items-center gap-2 px-5 py-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl font-semibold text-sm">
-                                    <Lock className="w-4 h-4" /> Baseline Locked
+                                <div className="flex items-center gap-2 px-4 py-3 bg-emerald-500/10 border border-emerald-300/60 text-emerald-800 rounded-2xl font-bold text-xs shadow-sm">
+                                    <Check className="w-4 h-4 text-emerald-600 stroke-[3]" /> Baseline Active
                                 </div>
                             ) : (
                                 <button
@@ -692,51 +714,118 @@ export default function ProjectDetail({ project, onBack }) {
                                     onClick={openReadinessWorkspace}
                                     aria-expanded={isReadinessOpen}
                                     aria-controls="baseline-readiness-workspace"
-                                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition duration-150 border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 cursor-pointer"
+                                    className="flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-xs transition-all border border-amber-300 bg-amber-50/80 text-amber-900 hover:bg-amber-100 shadow-sm active:scale-95 cursor-pointer"
                                 >
-                                    <Lock className="w-4 h-4" />
-                                    {userRole === 'Project Manager' ? 'Check & Lock Baseline' : 'Check plan'}
+                                    <Lock className="w-4 h-4 text-amber-700" />
+                                    {userRole === 'Project Manager' ? 'Check & Lock Baseline' : 'Check Plan'}
                                 </button>
                             )
                         )}
                     </div>
                 </div>
 
-                {/* KPI STATS BAR STRIP */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 ml-14">
+                {/* 4-COLUMN KPI INTELLIGENCE CARDS WITH VIBRANT ENHANCED ICONS */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
                     {[
-                        { label: 'Planned Start', value: project.planned_start ? formatDate(project.planned_start) : '—', color: 'text-slate-800', icon: <Calendar className="w-4 h-4 text-emerald-600" />, bg: 'bg-emerald-50 border-emerald-100/50' },
-                        { label: 'Target Finish', value: project.planned_end ? formatDate(project.planned_end) : '—', color: 'text-slate-800', icon: <Calendar className="w-4 h-4 text-amber-650" />, bg: 'bg-amber-50 border-amber-100/50' },
-                        { label: 'Project Duration', value: `${durationDays} Days`, color: 'text-emerald-700', icon: <Clock className="w-4 h-4 text-emerald-600" />, bg: 'bg-emerald-50 border-emerald-100/50' },
-                        { label: 'Project Total Budget (IDR)', value: formatCurrency(project.total_budget), color: 'text-rose-705', icon: <DollarSign className="w-4 h-4 text-rose-600" />, bg: 'bg-rose-50 border-rose-100/50' }
+                        { 
+                            label: 'Planned Start', 
+                            value: project.planned_start ? formatDate(project.planned_start) : '—', 
+                            color: 'text-slate-900', 
+                            icon: <Calendar className="w-4.5 h-4.5 text-emerald-600" />, 
+                            bg: 'bg-emerald-500/10 border-emerald-200/80' 
+                        },
+                        { 
+                            label: 'Target Finish', 
+                            value: project.planned_end ? formatDate(project.planned_end) : '—', 
+                            color: 'text-slate-900', 
+                            icon: <Calendar className="w-4.5 h-4.5 text-teal-600" />, 
+                            bg: 'bg-teal-500/10 border-teal-200/80' 
+                        },
+                        { 
+                            label: 'Project Duration', 
+                            value: `${durationDays} Days`, 
+                            color: 'text-emerald-700', 
+                            icon: <Clock className="w-4.5 h-4.5 text-blue-600" />, 
+                            bg: 'bg-blue-500/10 border-blue-200/80' 
+                        },
+                        { 
+                            label: 'Project Total Budget (IDR)', 
+                            value: formatCurrency(project.total_budget), 
+                            color: 'text-slate-900', 
+                            icon: <DollarSign className="w-4.5 h-4.5 text-emerald-600" />, 
+                            bg: 'bg-emerald-500/10 border-emerald-200/80' 
+                        }
                     ].map((stat, idx) => (
-                        <div key={idx} className="bg-white p-4.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-3.5">
-                            <div className={`p-2.5 rounded-xl border shrink-0 ${stat.bg}`}>{stat.icon}</div>
-                            <div className="text-left">
-                                <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">{stat.label}</h3>
-                                <p className={`text-sm font-black tracking-tight mt-0.5 ${stat.color}`}>{stat.value}</p>
+                        <div key={idx} className="bg-slate-50/60 p-4 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 flex items-center gap-3.5">
+                            <div className={`p-3 rounded-2xl border shrink-0 ${stat.bg}`}>{stat.icon}</div>
+                            <div className="text-left min-w-0">
+                                <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest truncate">{stat.label}</h3>
+                                <p className={`text-sm font-black tracking-tight mt-0.5 truncate ${stat.color}`}>{stat.value}</p>
                             </div>
                         </div>
                     ))}
                 </div>
 
-                {isLocked && baseline && (
-                    <div className="ml-14 flex items-center gap-3 px-4 py-3 bg-emerald-50/70 border border-emerald-200 rounded-2xl w-fit">
-                        <div className="p-2 bg-emerald-100 rounded-xl text-emerald-700"><Lock className="w-4 h-4" /></div>
-                        <div className="flex flex-col">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700/80">Active Baseline</span>
-                            <span className="text-sm font-bold text-emerald-800">{baseline.name}</span>
-                            <span className="text-[11px] text-emerald-700/80">
-                                {tasks.length} tasks
-                                {baseline.lockedBy ? ` · by ${baseline.lockedBy}` : ''}
-                                {baseline.lockedAt ? ` · locked ${baseline.lockedAt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}
-                            </span>
+                {/* TASK BUDGET AUTO-DEDUCTION BANNER */}
+                {(() => {
+                    const allTasksPlannedCost = tasks.reduce((sum, t) => sum + (parseFloat(t.planned_cost) || 0), 0);
+                    const projectTotalBudget = parseFloat(project.total_budget || 0);
+                    const remainingTaskBudget = projectTotalBudget - allTasksPlannedCost;
+                    const taskAllocPct = projectTotalBudget > 0 ? (allTasksPlannedCost / projectTotalBudget) * 100 : 0;
+                    return (
+                        <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-200 shadow-sm space-y-3.5">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                                <div className="flex items-center gap-2.5">
+                                    <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-200/60 text-emerald-600 shrink-0">
+                                        <DollarSign className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                        <h4 className="font-extrabold text-slate-800 text-sm">Task Budget Allocation & Auto-Deduction (IDR)</h4>
+                                        <p className="text-xs text-slate-500 mt-0.5">Task planned costs automatically deduct from the Project Total Budget in Indonesian Rupiah (IDR).</p>
+                                    </div>
+                                </div>
+                                <span className={`px-3.5 py-1.5 rounded-xl font-bold border text-xs shadow-sm self-start sm:self-auto ${
+                                    remainingTaskBudget < 0
+                                        ? 'bg-rose-50 border-rose-200 text-rose-700'
+                                        : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                }`}>
+                                    {remainingTaskBudget < 0 ? `Over-allocated by ${formatCurrency(Math.abs(remainingTaskBudget))}` : `${formatCurrency(remainingTaskBudget)} Remaining`}
+                                </span>
+                            </div>
+
+                            {/* Progress bar */}
+                            <div className="h-2.5 bg-slate-200/70 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full transition-all duration-500 ${
+                                    remainingTaskBudget < 0 ? 'bg-rose-500' : taskAllocPct >= 90 ? 'bg-amber-500' : 'bg-emerald-500'
+                                }`} style={{ width: `${Math.min(taskAllocPct, 100)}%` }} />
+                            </div>
+
+                            {/* 3 Metric Pills */}
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                                <div className="bg-white p-3 rounded-xl border border-slate-200">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Total Project Budget (IDR)</span>
+                                    <span className="font-mono font-black text-slate-900 text-sm mt-0.5 block">{formatCurrency(projectTotalBudget)}</span>
+                                </div>
+                                <div className="bg-white p-3 rounded-xl border border-slate-200">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Allocated to Tasks (IDR)</span>
+                                    <span className="font-mono font-black text-slate-800 text-sm mt-0.5 block">{formatCurrency(allTasksPlannedCost)} <span className="text-xs text-slate-400 font-normal">({taskAllocPct.toFixed(1)}%)</span></span>
+                                </div>
+                                <div className={`p-3 rounded-xl border ${remainingTaskBudget < 0 ? 'bg-rose-50 border-rose-200' : 'bg-white border-slate-200'}`}>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Auto-Deducted Remaining (IDR)</span>
+                                    <span className={`font-mono font-black text-sm mt-0.5 block ${remainingTaskBudget < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                        {formatCurrency(remainingTaskBudget)}
+                                    </span>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
             </div>
 
+
             {isReadinessOpen && !isLocked && (
+
+
                 <div id="baseline-readiness-workspace">
                     <PlanningReadinessPanel
                         projectId={project.id}
@@ -894,10 +983,11 @@ export default function ProjectDetail({ project, onBack }) {
                                             <td className="px-4 py-3.5 text-slate-700">{formatCurrency(task.planned_cost)}</td>
                                             <td className="px-4 py-3.5 text-slate-500">{task.planned_hours}</td>
                                             <td className="px-4 py-3.5">
-                                                <span className="bg-indigo-50 text-indigo-600 border border-indigo-100 text-xs font-bold px-2 py-0.5 rounded-lg">
+                                                <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-bold px-2 py-0.5 rounded-lg">
                                                     {(parseFloat(task.weight || 0) * 100).toFixed(0)}%
                                                 </span>
                                             </td>
+
                                             <td className="px-4 py-3.5 text-right">
                                                 {canEdit && (
                                                     <div className="flex items-center justify-end gap-1">
@@ -1139,6 +1229,38 @@ export default function ProjectDetail({ project, onBack }) {
                                     />
                                 </div>
                             </div>
+
+                            {/* Live Task Budget Auto-Deduction Preview */}
+                            {(() => {
+                                const allTasksCost = tasks.reduce((sum, t) => sum + (parseFloat(t.planned_cost) || 0), 0);
+                                const projBudget = parseFloat(project.total_budget || 0);
+                                const currTaskCost = editingTaskId ? (parseFloat(tasks.find(t => t.id === editingTaskId)?.planned_cost) || 0) : 0;
+                                const inputCost = parseGroupedWholeNumber(taskForm.planned_cost) || 0;
+                                const projTaskTotal = allTasksCost - currTaskCost + inputCost;
+                                const projRemaining = projBudget - projTaskTotal;
+
+                                return (
+                                    <div className={`p-3.5 rounded-xl border text-xs space-y-1 ${
+                                        projRemaining < 0 
+                                            ? 'bg-rose-50 border-rose-200 text-rose-800' 
+                                            : 'bg-emerald-50 border-emerald-100 text-emerald-800'
+                                    }`}>
+                                        <div className="flex justify-between items-center font-bold">
+                                            <span>Project Total Budget:</span>
+                                            <span className="font-mono">{formatCurrency(projBudget)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center font-medium opacity-80">
+                                            <span>Current Task Allocated Total:</span>
+                                            <span className="font-mono">{formatCurrency(allTasksCost)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center font-black pt-1 border-t border-black/5">
+                                            <span>Project Budget Remaining After Task:</span>
+                                            <span className="font-mono">{formatCurrency(projRemaining)}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
 
                             {otherTasks.length > 0 && (
                                 <div className="space-y-1">
