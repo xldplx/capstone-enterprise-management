@@ -5,8 +5,9 @@ import { computeEvm, indexColor } from '../../../utils/evmHelpers';
 import { apiFetch } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
 import { ZoomIn, ZoomOut, ChevronRight, Calendar, Target, Info, AlertCircle, CheckCircle2, Clock, Loader2, Search } from 'lucide-react';
+import { formatWholeNumber } from '../../../utils/numberFormat';
 
-const fmtIDR  = (v) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v || 0);
+const fmtIDR  = (v) => formatWholeNumber(v || 0);
 const fmtHrs  = (v) => `${Math.round(v || 0)} hrs`;
 const fmtPct  = (v) => `${(v || 0).toFixed(1)}%`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A';

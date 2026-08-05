@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Package, Plus, Search, X, Loader2, CheckCircle2, AlertTriangle, Droplet, Activity, Layers, History, ChevronDown, ChevronRight, Trash2, Download } from 'lucide-react';
+import { Package, Plus, Search, X, Loader2, CheckCircle2, AlertTriangle, Droplet, Activity, Layers, History, ChevronDown, ChevronRight, Trash2, Download, Pencil } from 'lucide-react';
 import { apiFetch } from '../../../utils/api';
 import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
 import { useTranslation } from '../../../utils/i18n';
+import RowActionsMenu from '../../../components/RowActionsMenu';
+import { formatProjectStatus, sortProjectsForSelection } from '../../../utils/projectPresentation';
 
 const CATEGORIES = ['Fuel', 'Lubricant', 'Welding', 'Cleaning', 'Other'];
 const UNITS      = ['L', 'kg', 'pcs'];
@@ -27,6 +29,7 @@ export default function Consumables() {
 
     // Add modal
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+    const [editingItem, setEditingItem]         = useState(null);
     const [addForm, setAddForm]               = useState({ name: '', category: 'Fuel', unit: 'L', current_stock: '', reorder_threshold: '' });
     const [addError, setAddError]             = useState('');
     const [saving, setSaving]                 = useState(false);
@@ -76,7 +79,7 @@ export default function Consumables() {
     useEffect(() => {
         setIsLoadingProjects(true);
         apiFetch('/projects').then(r => {
-            const list = r.data || [];
+            const list = sortProjectsForSelection(r.data || []);
             setProjects(list);
             if (list.length > 0) {
                 const firstId = String(list[0].id);
@@ -147,6 +150,27 @@ export default function Consumables() {
 
     const itemById = useMemo(() => Object.fromEntries(items.map(i => [i.id, i])), [items]);
     const selectedProject = projects.find(p => String(p.id) === selectedProjectId);
+    const sortedProjects = useMemo(() => sortProjectsForSelection(projects), [projects]);
+
+    const openAddModal = () => {
+        setEditingItem(null);
+        setAddForm({ name: '', category: 'Fuel', unit: 'L', current_stock: '', reorder_threshold: '' });
+        setAddError('');
+        setIsAddModalOpen(true);
+    };
+
+    const openEditModal = item => {
+        setEditingItem(item);
+        setAddForm({
+            name: item.name || '',
+            category: item.category || 'Other',
+            unit: item.unit || 'pcs',
+            current_stock: String(item.current_stock ?? ''),
+            reorder_threshold: String(item.reorder_threshold ?? ''),
+        });
+        setAddError('');
+        setIsAddModalOpen(true);
+    };
 
     // ── Add Consumable ────────────────────────────────────────────────────────
     const handleAddItem = async (e) => {
@@ -159,8 +183,8 @@ export default function Consumables() {
 
         setSaving(true);
         try {
-            await apiFetch('/consumables', {
-                method: 'POST',
+            await apiFetch(editingItem ? `/consumables/${editingItem.id}` : '/consumables', {
+                method: editingItem ? 'PUT' : 'POST',
                 body: JSON.stringify({
                     name:              addForm.name.trim(),
                     category:          addForm.category,
@@ -170,8 +194,9 @@ export default function Consumables() {
                 }),
             });
             setIsAddModalOpen(false);
+            setEditingItem(null);
             setAddForm({ name: '', category: 'Fuel', unit: 'L', current_stock: '', reorder_threshold: '' });
-            showToast(`"${addForm.name.trim()}" added successfully.`);
+            showToast(`"${addForm.name.trim()}" ${editingItem ? 'updated' : 'added'} successfully.`);
             fetchItems();
         } catch (err) { setAddError(err.message || 'Failed.'); }
         finally { setSaving(false); }
@@ -239,32 +264,6 @@ export default function Consumables() {
                 </div>
             )}
 
-            {/* ACTIONS */}
-            {canAdd && (
-                <div className="flex justify-end mb-6">
-                    <button onClick={() => { setAddForm({ name: '', category: 'Fuel', unit: 'L', current_stock: '', reorder_threshold: '' }); setAddError(''); setIsAddModalOpen(true); }}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-semibold shadow-lg shadow-emerald-200 transition-all transform hover:-translate-y-0.5 flex items-center gap-2">
-                        <Plus className="w-5 h-5" /> {t('consumables.addItem')}
-                    </button>
-                </div>
-            )}
-
-            {/* PROJECT SELECTOR */}
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-5 flex items-center gap-4">
-                <div className="flex items-center gap-2 text-slate-500">
-                    <Activity className="w-4 h-4" />
-                    <span className="text-xs font-bold uppercase tracking-widest">{t('consumables.projectScope')}</span>
-                </div>
-                <select value={selectedProjectId} onChange={handleProjectChange}
-                    disabled={isLoadingProjects || projects.length === 0}
-                    className="flex-1 max-w-md px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all text-slate-700 text-sm font-semibold disabled:opacity-60">
-                    {isLoadingProjects ? <option>{t('common.loading')}</option>
-                        : projects.length === 0 ? <option>No projects</option>
-                        : projects.map(p => <option key={p.id} value={p.id}>{p.project_code} — {p.project_name}</option>)}
-                </select>
-                <span className="text-xs text-slate-400 hidden md:inline">{t('consumables.logEvents')}</span>
-            </div>
-
             {/* KPI */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
                 {[
@@ -282,8 +281,8 @@ export default function Consumables() {
             </div>
 
             {/* FILTERS */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center gap-2 bg-white/40 backdrop-blur-md p-1.5 rounded-2xl border border-slate-200/50 shadow-sm">
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-4 flex flex-wrap items-center gap-3" aria-label="Consumables table controls">
+                <div className="flex items-center gap-2 overflow-x-auto p-1">
                     {STATUS_FILTERS.map(f => (
                         <button key={f} onClick={() => setStatusFilter(f)}
                             className={`px-5 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${statusFilter === f ? 'bg-white text-emerald-700 shadow-md border border-emerald-100' : 'text-slate-400 hover:text-slate-700'}`}>
@@ -291,8 +290,18 @@ export default function Consumables() {
                         </button>
                     ))}
                 </div>
-                <div className="flex items-center gap-3">
-                    <div className="relative">
+                <div className="flex items-center gap-2 min-w-60 flex-1">
+                    <Activity className="w-4 h-4 text-slate-400 shrink-0" />
+                    <select aria-label={t('consumables.projectScope')} value={selectedProjectId} onChange={handleProjectChange}
+                        disabled={isLoadingProjects || projects.length === 0}
+                        className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 text-slate-700 text-sm font-semibold disabled:opacity-60">
+                        {isLoadingProjects ? <option>{t('common.loading')}</option> : projects.length === 0 ? <option>No projects</option>
+                            : sortedProjects.map(p => <option key={p.id} value={p.id}>{p.project_code} — {p.project_name} ({formatProjectStatus(p.status)})</option>)}
+                    </select>
+                </div>
+                <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">{filtered.length} results</span>
+                <div className="flex flex-wrap items-center gap-3 ml-auto">
+                    <div className="relative min-w-56 flex-1">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input type="text" placeholder={t('consumables.searchPlaceholder')} value={search} onChange={e => setSearch(e.target.value)}
                             className="text-sm bg-white border border-slate-200 rounded-xl pl-9 pr-9 py-2 outline-none focus:border-emerald-500 transition-colors min-w-[240px] shadow-sm" />
@@ -302,6 +311,7 @@ export default function Consumables() {
                         className="text-sm font-semibold px-4 py-2 rounded-xl transition-all flex items-center gap-2 border shadow-sm text-emerald-600 bg-emerald-50 border-emerald-100 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 hover:shadow-lg hover:shadow-emerald-200 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-40 disabled:pointer-events-none">
                         <Download className="w-4 h-4" /> Export
                     </button>
+                    {canAdd && <button onClick={openAddModal} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center gap-2"><Plus className="w-4 h-4" /> {t('consumables.addItem')}</button>}
                 </div>
             </div>
 
@@ -316,14 +326,15 @@ export default function Consumables() {
                     <>
                         <div className="overflow-x-auto">
                             <table className="w-full text-left border-collapse">
+                                <caption className="sr-only">Consumables stock levels, reorder points, and available actions</caption>
                                 <thead>
                                     <tr className="bg-slate-50/80 text-xs uppercase tracking-wider text-slate-500 font-bold">
-                                        <th className="px-6 py-4">{t('common.name')}</th>
-                                        <th className="px-6 py-4">{t('consumables.category')}</th>
-                                        <th className="px-6 py-4">{t('consumables.stockTable')}</th>
-                                        <th className="px-6 py-4">{t('consumables.reorderAt')}</th>
-                                        <th className="px-6 py-4">{t('consumables.lastUsed')}</th>
-                                        <th className="px-6 py-4 text-right">{t('common.actions')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('common.name')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('consumables.category')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('consumables.stockTable')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('consumables.reorderAt')}</th>
+                                        <th scope="col" className="px-6 py-4">{t('consumables.lastUsed')}</th>
+                                        <th scope="col" className="px-6 py-4 text-right">{t('common.actions')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="text-sm font-medium text-slate-600 divide-y divide-slate-50">
@@ -342,21 +353,19 @@ export default function Consumables() {
                                                 <td className="px-6 py-4 text-slate-500 font-mono text-xs">{item.reorder_threshold} {item.unit}</td>
                                                 <td className="px-6 py-4 text-slate-400 text-xs">{fmtDate(item.last_used_at)}</td>
                                                 <td className="px-6 py-4">
-                                                    <div className="flex items-center justify-end gap-2">
+                                                    <div className="flex items-center justify-end gap-2 min-w-max">
                                                         {canLogUse && (
                                                             <button onClick={() => openLogModal(item.id)}
                                                                 disabled={parseFloat(item.current_stock) <= 0}
                                                                 title={parseFloat(item.current_stock) <= 0 ? t('consumables.outOfStock') : t('consumables.logConsumption')}
-                                                                className="text-[10px] font-bold uppercase px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 hover:bg-emerald-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                                                                {t('consumables.logConsumption')}
+                                                                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                                                <Activity className="w-3.5 h-3.5" /> Record usage
                                                             </button>
                                                         )}
-                                                        {canDelete && (
-                                                            <button onClick={() => setDeletingId(item.id)}
-                                                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors">
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </button>
-                                                        )}
+                                                        <RowActionsMenu label={`More actions for ${item.name}`} actions={[
+                                                            ...(canAdd ? [{ label: t('common.edit'), icon: Pencil, onSelect: () => openEditModal(item) }] : []),
+                                                            ...(canDelete ? [{ label: t('common.delete'), icon: Trash2, destructive: true, onSelect: () => setDeletingId(item.id) }] : []),
+                                                        ]} />
                                                     </div>
                                                 </td>
                                             </tr>
@@ -447,7 +456,7 @@ export default function Consumables() {
                 <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setIsAddModalOpen(false)}>
                     <div role="dialog" className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl border border-slate-100 animate-in fade-in duration-200" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-6">
-                            <h3 className="text-xl font-bold text-slate-800">{t('consumables.addItem')}</h3>
+                            <h3 className="text-xl font-bold text-slate-800">{editingItem ? `Edit ${editingItem.name}` : t('consumables.addItem')}</h3>
                             <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors"><X className="w-5 h-5" /></button>
                         </div>
                         {addError && <div className="p-3 mb-4 rounded-lg bg-red-50/80 border border-red-100 text-red-600 text-xs font-bold uppercase">{addError}</div>}
@@ -483,7 +492,7 @@ export default function Consumables() {
                             <div className="flex gap-3 pt-4">
                                 <button type="button" onClick={() => setIsAddModalOpen(false)} className="flex-1 px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-semibold hover:bg-slate-200 transition-all">{t('common.cancel')}</button>
                                 <button type="submit" disabled={saving} className="flex-1 px-6 py-3 bg-emerald-600 text-white rounded-xl font-semibold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 disabled:opacity-60">
-                                    {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('common.saving')}</> : t('consumables.addItem')}
+                                    {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('common.saving')}</> : editingItem ? t('projects.saveChanges') : t('consumables.addItem')}
                                 </button>
                             </div>
                         </form>
@@ -516,7 +525,7 @@ export default function Consumables() {
                                 <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">{t('common.project')} <span className="text-red-500">*</span></label>
                                 <select required value={logForm.project_id} onChange={e => setLogForm({ ...logForm, project_id: e.target.value })} className={inputCls}>
                                     <option value="">{t('consumables.selectProject')}</option>
-                                    {projects.map(p => <option key={p.id} value={p.id}>{p.project_code} — {p.project_name}</option>)}
+                                    {sortedProjects.map(p => <option key={p.id} value={p.id}>{p.project_code} — {p.project_name} ({formatProjectStatus(p.status)})</option>)}
                                 </select>
                             </div>
                             <div className="space-y-1">

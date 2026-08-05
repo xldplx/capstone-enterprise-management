@@ -53,7 +53,7 @@ export default function PlanVsActual() {
 
     const { BAC, EV, AC, PV, CPI, SPI, CV, SV, EAC, ETC, VAC, TCPI, overallPct, totalHoursVariance: totalHV } = evm;
 
-    const fmtIDR = (v) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(v);
+    const numericIDR = (v) => Number(v) || 0;
 
     const handleExport = () => {
         if (!selectedProject) return;
@@ -61,15 +61,15 @@ export default function PlanVsActual() {
         const kpiData = [
             { Metric: 'CPI', Value: CPI !== null ? CPI.toFixed(2) : 'N/A', Status: indexColor(CPI).label },
             { Metric: 'SPI', Value: SPI !== null ? SPI.toFixed(2) : 'N/A', Status: indexColor(SPI).label },
-            { Metric: 'CV',  Value: fmtIDR(CV),  Status: varianceColor(CV).label },
-            { Metric: 'SV',  Value: fmtIDR(SV),  Status: varianceColor(SV).label },
-            { Metric: 'BAC', Value: fmtIDR(BAC), Status: '' },
-            { Metric: 'EV',  Value: fmtIDR(EV),  Status: '' },
-            { Metric: 'AC',  Value: fmtIDR(AC),  Status: '' },
-            { Metric: 'PV',  Value: fmtIDR(PV),  Status: '' },
-            { Metric: 'EAC', Value: EAC !== null ? fmtIDR(Math.round(EAC)) : 'N/A', Status: '' },
-            { Metric: 'ETC', Value: ETC !== null ? fmtIDR(Math.round(ETC)) : 'N/A', Status: '' },
-            { Metric: 'VAC', Value: VAC !== null ? fmtIDR(Math.round(VAC)) : 'N/A', Status: VAC !== null ? varianceColor(VAC).label : '' },
+            { Metric: 'CV (IDR)',  Value: numericIDR(CV),  Status: varianceColor(CV).label },
+            { Metric: 'SV (IDR)',  Value: numericIDR(SV),  Status: varianceColor(SV).label },
+            { Metric: 'BAC (IDR)', Value: numericIDR(BAC), Status: '' },
+            { Metric: 'EV (IDR)',  Value: numericIDR(EV),  Status: '' },
+            { Metric: 'AC (IDR)',  Value: numericIDR(AC),  Status: '' },
+            { Metric: 'PV (IDR)',  Value: numericIDR(PV),  Status: '' },
+            { Metric: 'EAC (IDR)', Value: EAC !== null ? numericIDR(Math.round(EAC)) : 'N/A', Status: '' },
+            { Metric: 'ETC (IDR)', Value: ETC !== null ? numericIDR(Math.round(ETC)) : 'N/A', Status: '' },
+            { Metric: 'VAC (IDR)', Value: VAC !== null ? numericIDR(Math.round(VAC)) : 'N/A', Status: VAC !== null ? varianceColor(VAC).label : '' },
             { Metric: 'TCPI', Value: TCPI !== null ? TCPI.toFixed(2) : 'N/A', Status: TCPI !== null ? indexColor(TCPI).label : '' },
         ];
         const ws1 = XLSX.utils.json_to_sheet(kpiData);
@@ -80,8 +80,8 @@ export default function PlanVsActual() {
             const earnedHrs = Math.round((parseFloat(t.planned_hours) || 0) * (parseFloat(t.pct_complete) / 100));
             return {
                 'Task Name': t.task_name, 'WBS': t.wbs_code,
-                'Planned Cost': fmtIDR(t.planned_cost), 'Actual Cost': fmtIDR(t.actual_cost),
-                'Cost Variance': fmtIDR(taskEV - parseFloat(t.actual_cost)),
+                'Planned Cost (IDR)': numericIDR(t.planned_cost), 'Actual Cost (IDR)': numericIDR(t.actual_cost),
+                'Cost Variance (IDR)': numericIDR(taskEV - parseFloat(t.actual_cost)),
                 'Planned Hours': t.planned_hours, 'Actual Hours': t.actual_hours,
                 'Hours Variance': parseFloat(t.actual_hours) > 0 ? earnedHrs - parseFloat(t.actual_hours) : 0,
                 '% Complete': `${t.pct_complete}%`,

@@ -4,6 +4,7 @@ import {
     Info, Loader2, Lock, RefreshCw, ShieldCheck, Unlink, X,
 } from 'lucide-react';
 import { apiFetch } from '../../../utils/api';
+import { previewRemediesForFinding, taskIdForFinding } from '../../../utils/planningReadinessUi';
 
 const STATUS = {
     blocked: {
@@ -185,6 +186,7 @@ export default function PlanningReadinessPanel({ projectId, tasks, canLock, onCl
     }, [projectId]);
 
     const selectedFinding = report?.findings.find(finding => findingKey(finding) === selectedKey) || null;
+    const previewRemedies = previewRemediesForFinding(selectedFinding);
     const affectedTasks = (selectedFinding?.taskIds || [])
         .map(id => tasks.find(task => String(task.id) === String(id)))
         .filter(Boolean);
@@ -315,16 +317,27 @@ export default function PlanningReadinessPanel({ projectId, tasks, canLock, onCl
 
                                         {selectedFinding.code === 'DATE_ORDER_CONFLICT' && (
                                             <div className="mt-5">
-                                                {selectedFinding.previewAvailable ? (
-                                                    <div className="flex flex-wrap gap-2">
-                                                        <button type="button" onClick={() => runPreview('shift_successor_chain')} disabled={previewLoading}
-                                                            className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-800 px-4 text-sm font-semibold text-white transition duration-150 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:opacity-50">
-                                                            {previewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <GitCompareArrows className="w-4 h-4" />} Preview shift chain
-                                                        </button>
-                                                        <button type="button" onClick={() => runPreview('remove_dependency')} disabled={previewLoading}
-                                                            className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 transition duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50">
-                                                            <Unlink className="w-4 h-4" /> Preview remove dependency
-                                                        </button>
+                                                {previewRemedies.length > 0 ? (
+                                                    <div className="space-y-3">
+                                                        {!selectedFinding.previewAvailable && (
+                                                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                                                Shift preview is unavailable until the dependency cycle is resolved. You can still preview removing this dependency.
+                                                            </div>
+                                                        )}
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {previewRemedies.includes('shift_successor_chain') && (
+                                                                <button type="button" onClick={() => runPreview('shift_successor_chain')} disabled={previewLoading}
+                                                                    className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-slate-800 px-4 text-sm font-semibold text-white transition duration-150 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:opacity-50">
+                                                                    {previewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <GitCompareArrows className="w-4 h-4" />} Preview shift chain
+                                                                </button>
+                                                            )}
+                                                            {previewRemedies.includes('remove_dependency') && (
+                                                                <button type="button" onClick={() => runPreview('remove_dependency')} disabled={previewLoading}
+                                                                    className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 transition duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50">
+                                                                    <Unlink className="w-4 h-4" /> Preview remove dependency
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 ) : (
                                                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -338,7 +351,7 @@ export default function PlanningReadinessPanel({ projectId, tasks, canLock, onCl
                                         {preview && <PreviewResult preview={preview} tasks={tasks} />}
 
                                         {affectedTasks.length > 0 && (
-                                            <button type="button" onClick={() => onOpenTask(affectedTasks[affectedTasks.length > 1 ? 1 : 0].id)}
+                                            <button type="button" onClick={() => onOpenTask(taskIdForFinding(selectedFinding, affectedTasks))}
                                                 className="mt-5 inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 transition duration-150 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500">
                                                 Open task <ArrowRight className="w-4 h-4" />
                                             </button>

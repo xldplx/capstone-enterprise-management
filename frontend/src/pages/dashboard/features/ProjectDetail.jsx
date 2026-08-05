@@ -6,7 +6,12 @@ import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
 import { taskToRow } from '../../../utils/taskSchema';
 import { apiFetch } from '../../../utils/api';
 import { load, save } from '../../../utils/localStore';
+import { resolvePlanningLockState } from '../../../utils/planningLockState';
 import PlanningReadinessPanel from './PlanningReadinessPanel';
+import CurrencyInput from '../../../components/CurrencyInput';
+import { parseGroupedWholeNumber } from '../../../utils/numberFormat';
+import { buildWbsTaskCounts, filterTasksByWbs } from '../../../utils/wbsTaskFilter';
+import { resolveDisplayedProjectStatus } from '../../../utils/projectPresentation';
 
 // Recursive WBS node component
 function WbsNode({
@@ -297,7 +302,7 @@ export default function ProjectDetail({ project, onBack }) {
             const fetchedTasks = taskRes.data || [];
             setTasks(fetchedTasks);
             setWbsNodes(wbsRes.data || []);
-            setIsLocked(fetchedTasks.some(t => t.is_baseline_locked));
+            setIsLocked(resolvePlanningLockState(fetchedTasks, baselineRes));
             // Prefer baseline metadata from the DB (name / who / when); fall back to local cache.
             if (baselineRes?.success && baselineRes.data) {
                 const b = baselineRes.data;
@@ -442,23 +447,11 @@ export default function ProjectDetail({ project, onBack }) {
         : null;
 
     const selectedNode  = wbsNodes.find(n => String(n.id) === String(selectedWbsId));
-    
-    // Filter tasks based on WBS code hierarchy (matching exact or sub-nodes)
-    const filteredTasks = useMemo(() => {
-        if (!selectedNode) return tasks;
-        const codePrefix = selectedNode.wbs_code;
-        return tasks.filter(t => t.wbs_code && (t.wbs_code === codePrefix || t.wbs_code.startsWith(codePrefix + '.')));
-    }, [tasks, selectedNode]);
-
-    // Task count per WBS node (includes descendants) matching WBS codes
-    const taskCounts = useMemo(() => {
-        const map = {};
-        for (const n of wbsNodes) {
-            const codePrefix = n.wbs_code;
-            map[n.id] = tasks.filter(t => t.wbs_code && (t.wbs_code === codePrefix || t.wbs_code.startsWith(codePrefix + '.'))).length;
-        }
-        return map;
-    }, [wbsNodes, tasks]);
+    const filteredTasks = useMemo(
+        () => selectedNode ? filterTasksByWbs(tasks, wbsNodes, selectedNode.id) : tasks,
+        [tasks, wbsNodes, selectedNode],
+    );
+    const taskCounts = useMemo(() => buildWbsTaskCounts(tasks, wbsNodes), [wbsNodes, tasks]);
     const anyExpandable = wbsNodes.some(n => wbsNodes.some(m => m.parent_id !== null && String(m.parent_id) === String(n.id)));
 
     const totalCost   = filteredTasks.reduce((s, t) => s + parseFloat(t.planned_cost   || 0), 0);
@@ -516,7 +509,8 @@ export default function ProjectDetail({ project, onBack }) {
         if (new Date(taskForm.planned_end) < new Date(taskForm.planned_start)) {
             setTaskError('End date must be on or after start date.'); return;
         }
-        if (parseFloat(taskForm.planned_cost) <= 0 || isNaN(parseFloat(taskForm.planned_cost))) {
+        const plannedCost = parseGroupedWholeNumber(taskForm.planned_cost);
+        if (!plannedCost || Number.isNaN(plannedCost)) {
             setTaskError('Planned cost must be greater than zero.'); return;
         }
         if (parseFloat(taskForm.planned_hours) <= 0 || isNaN(parseFloat(taskForm.planned_hours))) {
@@ -545,7 +539,7 @@ export default function ProjectDetail({ project, onBack }) {
                 planned_start:    taskForm.planned_start,
                 planned_end:      taskForm.planned_end,
                 planned_duration: duration,
-                planned_cost:     parseFloat(taskForm.planned_cost)  || 0,
+                planned_cost:     plannedCost,
                 planned_hours:    parseFloat(taskForm.planned_hours) || 0,
                 weight:           parseFloat(taskForm.weight)        || 0,
                 predecessors:     taskForm.predecessors || [],
@@ -612,7 +606,7 @@ export default function ProjectDetail({ project, onBack }) {
         }
     };
 
-    const currentStatus = isLocked ? 'active' : (project.status || 'planning');
+    const currentStatus = resolveDisplayedProjectStatus(project, isLocked);
 
     const openReadinessWorkspace = () => {
         setLockError('');
@@ -714,7 +708,7 @@ export default function ProjectDetail({ project, onBack }) {
                         { label: 'Planned Start', value: project.planned_start ? formatDate(project.planned_start) : '—', color: 'text-slate-800', icon: <Calendar className="w-4 h-4 text-emerald-600" />, bg: 'bg-emerald-50 border-emerald-100/50' },
                         { label: 'Target Finish', value: project.planned_end ? formatDate(project.planned_end) : '—', color: 'text-slate-800', icon: <Calendar className="w-4 h-4 text-amber-650" />, bg: 'bg-amber-50 border-amber-100/50' },
                         { label: 'Project Duration', value: `${durationDays} Days`, color: 'text-emerald-700', icon: <Clock className="w-4 h-4 text-emerald-600" />, bg: 'bg-emerald-50 border-emerald-100/50' },
-                        { label: 'Total Budget (BAC)', value: formatCurrency(project.total_budget), color: 'text-rose-705', icon: <DollarSign className="w-4 h-4 text-rose-600" />, bg: 'bg-rose-50 border-rose-100/50' }
+                        { label: 'Project Total Budget (IDR)', value: formatCurrency(project.total_budget), color: 'text-rose-705', icon: <DollarSign className="w-4 h-4 text-rose-600" />, bg: 'bg-rose-50 border-rose-100/50' }
                     ].map((stat, idx) => (
                         <div key={idx} className="bg-white p-4.5 rounded-2xl border border-slate-200/80 shadow-sm hover:shadow-md transition-all duration-300 flex items-center gap-3.5">
                             <div className={`p-2.5 rounded-xl border shrink-0 ${stat.bg}`}>{stat.icon}</div>
@@ -977,7 +971,7 @@ export default function ProjectDetail({ project, onBack }) {
                         </div>
 
                         {wbsError && (
-                            <div className="p-3 mb-4 rounded-lg bg-red-50/80 border border-red-100 text-red-600 text-xs text-center font-bold uppercase">
+                            <div id="task-form-error" role="alert" className="p-3 mb-4 rounded-lg bg-red-50/80 border border-red-100 text-red-600 text-xs text-center font-bold uppercase">
                                 {wbsError}
                             </div>
                         )}
@@ -1119,10 +1113,13 @@ export default function ProjectDetail({ project, onBack }) {
                             <div className="grid grid-cols-3 gap-3">
                                 <div className="space-y-1">
                                     <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Cost (IDR)</label>
-                                    <input type="number" value={taskForm.planned_cost}
-                                        onChange={e => setTaskForm({ ...taskForm, planned_cost: e.target.value })}
+                                    <CurrencyInput value={taskForm.planned_cost}
+                                        onChange={value => setTaskForm({ ...taskForm, planned_cost: value })}
+                                        onRejectedInput={setTaskError}
                                         className="w-full px-4 py-3 bg-white/50 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all text-slate-700 text-sm"
                                         placeholder="0"
+                                        aria-describedby={taskError ? 'task-form-error' : undefined}
+                                        aria-invalid={Boolean(taskError)}
                                     />
                                 </div>
                                 <div className="space-y-1">

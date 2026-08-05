@@ -68,15 +68,11 @@ export default function DashboardLayout() {
 
     useEffect(() => {
         const fetchAlerts = () => {
-            apiFetch('/alerts/raw')
-                .then(raw => {
-                    if (raw.success) {
-                        apiFetch('/alerts/thresholds').then(thresh => {
-                            const tv = thresh.success && thresh.data ? thresh.data : { cpi_amber: 1.00, cpi_red: 0.90, spi_amber: 1.00, spi_red: 0.90 };
-                            const computed = computeAlerts(raw.projects || [], raw.tasks || [], tv);
-                            setDbAlerts(computed);
-                        }).catch(console.error);
-                    }
+            Promise.all([apiFetch('/projects'), apiFetch('/alerts/raw'), apiFetch('/alerts/thresholds')])
+                .then(([projectResponse, raw, thresh]) => {
+                    if (!projectResponse.success || !raw.success) return;
+                    const tv = thresh.success && thresh.data ? thresh.data : { cpi_amber: 1.00, cpi_red: 0.90, spi_amber: 1.00, spi_red: 0.90 };
+                    setDbAlerts(computeAlerts(projectResponse.data || [], raw.tasks || [], tv));
                 })
                 .catch(console.error);
         };

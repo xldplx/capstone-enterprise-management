@@ -2,11 +2,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
     Plus, Search, X, Loader2, CheckCircle2, AlertTriangle,
-    Wrench, Pencil, Trash2, Download, Layers, Activity
+    Wrench, Pencil, Trash2, Download, Activity
 } from 'lucide-react';
+import { BarChart, Bar, CartesianGrid, Cell, LabelList, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiFetch } from '../../../utils/api';
-import { useTranslation } from '../../../utils/i18n';
 import { exportWorkbook, exportFilename } from '../../../utils/excelExport';
+import { equipmentVarianceView } from '../../../utils/resourceMetrics';
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
@@ -17,9 +18,7 @@ const STATUS_BADGE = {
     out_of_service: 'bg-red-50 text-red-700 border-red-100',
 };
 
-export default function Equipment({ onNavigate, initialProjectId, onConsumeInitial }) {
-    const { t } = useTranslation();
-
+export default function Equipment({ initialProjectId, onConsumeInitial }) {
     const [equipment, setEquipment] = useState([]);
     const [projects, setProjects] = useState([]);
     const [selectedProjectId, setSelectedProjectId] = useState('');
@@ -103,6 +102,9 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
         available: equipment.filter(e => e.status === 'available').length,
         inUse: equipment.filter(e => e.status === 'in_use').length,
         maintenance: equipment.filter(e => e.status === 'maintenance').length,
+        averageUtilization: equipment.length
+            ? equipment.reduce((sum, item) => sum + (Number(item.utilization) || 0), 0) / equipment.length
+            : 0,
     }), [equipment]);
 
     // Filter
@@ -110,6 +112,7 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
         if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
         return true;
     }), [equipment, search]);
+    const varianceRows = useMemo(() => equipmentVarianceView(filtered), [filtered]);
 
     // Add / Edit
     const openAddModal = () => {
@@ -137,6 +140,13 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
     const handleSubmit = async (e) => {
         e.preventDefault(); setAddError('');
         if (!addForm.name.trim()) { setAddError('Name is required.'); return; }
+        const utilizationFields = [
+            ['Current utilization', addForm.utilization],
+            ['Planned utilization', addForm.planned_utilization],
+            ['Actual utilization', addForm.actual_utilization],
+        ];
+        const invalidUtilization = utilizationFields.find(([, value]) => value === '' || Number.isNaN(Number(value)) || Number(value) < 0 || Number(value) > 100);
+        if (invalidUtilization) { setAddError(`${invalidUtilization[0]} must be between 0 and 100.`); return; }
         setSavingAdd(true);
         try {
             if (editingEquipment) {
@@ -238,100 +248,61 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
                 </select>
             </div>
 
-            {/* KPI */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Compact fleet summary */}
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-5 grid grid-cols-2 lg:grid-cols-5 gap-4" aria-label="Fleet summary">
                 {[
-                    { icon: <Wrench className="w-5 h-5" />, bg: 'bg-slate-100', cls: 'text-slate-500', label: 'Total', value: counts.total, valCls: 'text-slate-800' },
-                    { icon: <CheckCircle2 className="w-5 h-5" />, bg: 'bg-emerald-50', cls: 'text-emerald-600', label: 'Available', value: counts.available, valCls: 'text-emerald-600' },
-                    { icon: <AlertTriangle className="w-5 h-5" />, bg: 'bg-blue-50', cls: 'text-blue-600', label: 'In Use', value: counts.inUse, valCls: 'text-blue-600' },
-                    { icon: <AlertTriangle className="w-5 h-5" />, bg: 'bg-amber-50', cls: 'text-amber-600', label: 'Maintenance', value: counts.maintenance, valCls: 'text-amber-600' },
-                ].map((kpi, i) => (
-                    <div key={i} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                        <div className={`p-3 ${kpi.bg} rounded-xl ${kpi.cls} w-fit mb-4`}>{kpi.icon}</div>
-                        <h3 className="text-slate-400 text-[10px] font-black uppercase tracking-widest">{kpi.label}</h3>
-                        <p className={`text-2xl font-black tracking-tight mt-1 ${kpi.valCls}`}>{kpi.value}</p>
+                    ['Fleet', counts.total, 'text-slate-800'],
+                    ['Available', counts.available, 'text-emerald-700'],
+                    ['In use', counts.inUse, 'text-blue-700'],
+                    ['Maintenance', counts.maintenance, 'text-amber-700'],
+                    ['Avg. current utilization', `${counts.averageUtilization.toFixed(1)}%`, 'text-slate-800'],
+                ].map(([label, value, color]) => (
+                    <div key={label} className="min-w-0 border-l-2 border-slate-100 pl-3 first:border-l-0 first:pl-0">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+                        <p className={`mt-1 text-xl font-black ${color}`}>{value}</p>
                     </div>
                 ))}
             </div>
 
-            {/* Histogram */}
+            {/* Plan vs Actual */}
             <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <Layers className="w-5 h-5" /> Utilization by Equipment
-                </h3>
-                <div className="h-64 flex items-end justify-between gap-2 md:gap-4 border-b border-slate-100 pb-2">
-                    {filtered.slice(0, 12).map((e, idx) => {
-                        const maxUtil = Math.max(...filtered.map(x => parseFloat(x.utilization) || 0), 1);
-                        const pct = (parseFloat(e.utilization) || 0) / maxUtil * 100;
-                        return (
-                            <div key={idx} className="flex-1 flex flex-col justify-end group relative h-full">
-                                {parseFloat(e.utilization) > 0 && (
-                                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] font-bold px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-                                        {e.name}: {e.utilization}%
-                                    </div>
-                                )}
-                                <div style={{ height: `${Math.max(pct, parseFloat(e.utilization) > 0 ? 4 : 0)}%` }}
-                                    className="w-full bg-emerald-100 rounded-t-lg transition-all duration-300 relative overflow-hidden min-h-[4px]">
-                                    {parseFloat(e.utilization) > 0 && <div className="absolute bottom-0 left-0 right-0 bg-emerald-500 h-full" />}
-                                </div>
-                                <span className="text-[10px] text-slate-300 text-center mt-2 font-mono truncate">{e.location || '—'}</span>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-
-            {/* Plan vs Actual Variance */}
-            <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
-                <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <Activity className="w-5 h-5" /> Plan vs Actual Variance
-                </h3>
-                <div className="h-64 flex items-end justify-between gap-2 md:gap-4 border-b border-slate-100 pb-2">
-                    {filtered.slice(0, 12).map((e, idx) => {
-                        const planned = parseFloat(e.planned_utilization) || 0;
-                        const actual = parseFloat(e.actual_utilization) || 0;
-                        const maxVal = Math.max(...filtered.map(x => Math.max(parseFloat(x.planned_utilization) || 0, parseFloat(x.actual_utilization) || 0)), 1);
-                        const plannedPct = (planned / maxVal) * 100;
-                        const actualPct = (actual / maxVal) * 100;
-                        const variance = actual - planned;
-                        return (
-                            <div key={idx} className="flex-1 flex flex-col justify-end group relative h-full">
-                                {(planned > 0 || actual > 0) && (
-                                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] font-bold px-2 py-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-                                        {e.name}: {planned}% (planned) vs {actual}% (actual)
-                                    </div>
-                                )}
-                                <div className="flex flex-col gap-1 h-full justify-end">
-                                    {/* Planned */}
-                                    <div style={{ height: `${Math.max(plannedPct, planned > 0 ? 4 : 0)}%` }}
-                                        className="w-full bg-slate-200 rounded-t-lg transition-all duration-300 relative overflow-hidden min-h-[4px]">
-                                        {planned > 0 && <div className="absolute bottom-0 left-0 right-0 bg-slate-500 h-full" />}
-                                    </div>
-                                    {/* Actual */}
-                                    <div style={{ height: `${Math.max(actualPct, actual > 0 ? 4 : 0)}%` }}
-                                        className={`w-full rounded-t-lg transition-all duration-300 relative overflow-hidden min-h-[4px] ${variance >= 0 ? 'bg-emerald-100' : 'bg-red-100'}`}>
-                                        {actual > 0 && <div className={`absolute bottom-0 left-0 right-0 h-full ${variance >= 0 ? 'bg-emerald-500' : 'bg-red-500'}`} />}
-                                    </div>
-                                </div>
-                                <span className="text-[10px] text-slate-300 text-center mt-2 font-mono truncate">{e.location || '—'}</span>
-                            </div>
-                        );
-                    })}
-                </div>
-                <div className="flex items-center gap-6 mt-4 text-xs text-slate-500 font-semibold">
-                    <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-slate-500 rounded"></div>
-                        <span>Planned</span>
+                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-6">
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Activity className="w-5 h-5" /> Plan vs Actual Utilization</h3>
+                        <p className="text-xs text-slate-500 mt-1">Top {varianceRows.length} absolute variances after search · fixed 0–100% scale</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-emerald-500 rounded"></div>
-                        <span>Actual (Over/On Plan)</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-red-500 rounded"></div>
-                        <span>Actual (Under Plan)</span>
-                    </div>
+                    <span className="text-xs font-bold text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">Fleet average current utilization: {counts.averageUtilization.toFixed(1)}%</span>
                 </div>
+                {varianceRows.length ? (
+                    <>
+                        <div style={{ height: Math.max(300, varianceRows.length * 58) }} role="img" aria-label="Equipment planned versus actual utilization chart">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={varianceRows} layout="vertical" margin={{ top: 10, right: 48, left: 16, bottom: 10 }} barGap={3}>
+                                    <CartesianGrid stroke="#f1f5f9" horizontal={false} />
+                                    <XAxis type="number" domain={[0, 100]} tickFormatter={value => `${value}%`} tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                                    <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 10, fontWeight: 700, fill: '#475569' }} axisLine={false} tickLine={false} />
+                                    <Tooltip formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]} />
+                                    <Legend />
+                                    <Bar dataKey="planned" name="Plan" fill="#64748b" radius={[0, 6, 6, 0]}>
+                                        <LabelList dataKey="planned" position="right" formatter={value => `${Number(value).toFixed(1)}%`} className="fill-slate-500 text-[9px]" />
+                                    </Bar>
+                                    <Bar dataKey="actual" name="Actual" radius={[0, 6, 6, 0]}>
+                                        {varianceRows.map(row => <Cell key={row.id || row.name} fill={row.state === 'on_target' ? '#10b981' : row.state === 'small_shortfall' ? '#f59e0b' : '#f43f5e'} />)}
+                                        <LabelList dataKey="actual" position="right" formatter={value => `${Number(value).toFixed(1)}%`} className="fill-slate-500 text-[9px]" />
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <ul className="mt-5 grid sm:grid-cols-2 gap-2" aria-label="Written equipment variances">
+                            {varianceRows.map(row => (
+                                <li key={row.id || row.name} className="flex items-center justify-between gap-3 bg-slate-50 rounded-xl px-3 py-2 text-xs">
+                                    <span className="font-semibold text-slate-700 truncate">{row.name}</span>
+                                    <span className={`font-bold whitespace-nowrap ${row.state === 'on_target' ? 'text-emerald-700' : row.state === 'small_shortfall' ? 'text-amber-700' : 'text-rose-700'}`}>{row.varianceLabel}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </>
+                ) : <p className="py-16 text-center text-sm text-slate-400">No equipment matches the current search.</p>}
             </div>
 
             {/* Filters */}
@@ -364,7 +335,9 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
                                         <th className="px-6 py-4">Location</th>
                                         <th className="px-6 py-4">Status</th>
                                         <th className="px-6 py-4">Last Service</th>
-                                        <th className="px-6 py-4">Utilization</th>
+                                        <th className="px-6 py-4">Current Utilization</th>
+                                        <th className="px-6 py-4">Plan / Actual</th>
+                                        <th className="px-6 py-4">Variance</th>
                                         <th className="px-6 py-4 text-right">Actions</th>
                                     </tr>
                                 </thead>
@@ -383,6 +356,8 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
                                                 </td>
                                                 <td className="px-6 py-4 text-slate-400 text-xs">{fmtDate(equip.last_service)}</td>
                                                 <td className="px-6 py-4 font-bold text-slate-700">{(parseFloat(equip.utilization) || 0).toFixed(1)}%</td>
+                                                <td className="px-6 py-4 text-xs text-slate-500">{(Number(equip.planned_utilization) || 0).toFixed(1)}% / {(Number(equip.actual_utilization) || 0).toFixed(1)}%</td>
+                                                <td className="px-6 py-4 text-xs font-bold text-slate-600">{((Number(equip.actual_utilization) || 0) - (Number(equip.planned_utilization) || 0)).toFixed(1)}%</td>
                                                 <td className="px-6 py-4">
                                                     <div className="flex items-center justify-end gap-1">
                                                         {canEdit && (
@@ -403,7 +378,7 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
                                         );
                                     }) : (
                                         <tr>
-                                            <td colSpan="8" className="px-6 py-16 text-center text-slate-400">
+                                            <td colSpan="10" className="px-6 py-16 text-center text-slate-400">
                                                 <div className="flex flex-col items-center gap-3">
                                                     <Wrench className="w-12 h-12 text-slate-200" />
                                                     <p>No equipment found.</p>
@@ -482,7 +457,7 @@ export default function Equipment({ onNavigate, initialProjectId, onConsumeIniti
                                         className={inputCls} />
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Utilization (%)</label>
+                                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Current Utilization (%)</label>
                                     <input type="number" step="0.1" min="0" max="100" value={addForm.utilization} onChange={e => setAddForm({ ...addForm, utilization: e.target.value })}
                                         className={inputCls} />
                                 </div>

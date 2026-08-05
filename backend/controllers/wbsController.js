@@ -17,16 +17,32 @@ const getWbsByProject = async (req, res) => {
 };
 
 const createWbsNode = async (req, res) => {
-    const { parent_id, wbs_code, name, level } = req.body;
+    const { parent_id, wbs_code, name } = req.body;
     if (!wbs_code || !name)
         return res.status(400).json({ success: false, message: 'wbs_code and name are required.' });
     try {
         await requirePlanningUnlocked(req.params.projectId);
+        const hasParent = parent_id !== undefined && parent_id !== null && String(parent_id).trim() !== '';
+        let parent = null;
+        if (hasParent) {
+            const { data, error } = await supabase.from('wbs')
+                .select('id, level')
+                .eq('id', parseInt(parent_id))
+                .eq('project_id', parseInt(req.params.projectId))
+                .maybeSingle();
+            if (error) return res.status(500).json({ success: false, message: error.message });
+            if (!data) return res.status(400).json({
+                success: false,
+                code: 'INVALID_WBS_PARENT',
+                message: 'Parent WBS node must belong to this project.',
+            });
+            parent = data;
+        }
         const { data, error } = await supabase.from('wbs').insert([{
             project_id: parseInt(req.params.projectId),
-            parent_id:  parent_id || null,
+            parent_id:  parent?.id || null,
             wbs_code, name,
-            level: level || 1,
+            level: parent ? Number(parent.level || 0) + 1 : 1,
         }]).select().single();
         if (error) return res.status(500).json({ success: false, message: error.message });
         res.status(201).json({ success: true, data });
@@ -57,7 +73,8 @@ const updateWbsNode = async (req, res) => {
 const deleteWbsNode = async (req, res) => {
     try {
         await requirePlanningUnlocked(req.params.projectId);
-        const { data: linked } = await supabase.from('tasks').select('id').eq('wbs_id', req.params.id).limit(1);
+        const { data: linked, error: linkedError } = await supabase.from('tasks').select('id').eq('wbs_id', req.params.id).limit(1);
+        if (linkedError) return res.status(500).json({ success: false, message: linkedError.message });
         if (linked && linked.length > 0)
             return res.status(409).json({ success: false, message: 'Cannot delete — tasks are assigned to this WBS node.' });
         const { error } = await supabase.from('wbs').delete()

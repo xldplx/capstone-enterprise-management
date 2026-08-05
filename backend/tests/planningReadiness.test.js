@@ -82,6 +82,17 @@ test('self, dangling and cyclic dependencies are blocked', () => {
     assert.ok(codes(cycle).includes('DEPENDENCY_CYCLE'));
 });
 
+test('cycle finding names only tasks that are actually in the cycle', () => {
+    const report = evaluatePlanReadiness(project, wbs, [
+        task({ id: 1, weight: 0.25, predecessors: [2] }),
+        task({ id: 2, weight: 0.25, predecessors: [1] }),
+        task({ id: 3, weight: 0.5, predecessors: [2] }),
+    ]);
+
+    const finding = report.findings.find(item => item.code === 'DEPENDENCY_CYCLE');
+    assert.deepEqual(finding.taskIds, [1, 2]);
+});
+
 test('same-day handoff is valid and earlier successor is a previewable conflict', () => {
     const valid = evaluatePlanReadiness(project, wbs, [
         task({ id: 1, weight: 0.5, planned_end: '2026-01-05' }),
@@ -120,6 +131,21 @@ test('budget variance is informational', () => {
     const finding = report.findings.find(item => item.code === 'BUDGET_VARIANCE');
     assert.equal(finding.severity, 'info');
     assert.equal(report.metrics.budgetDelta, 200);
+});
+
+test('costs that reconcile to the cent do not create a floating-point budget variance', () => {
+    const report = evaluatePlanReadiness(
+        { ...project, total_budget: '300.30' },
+        wbs,
+        [
+            task({ id: 1, weight: 0.5, planned_cost: '100.10' }),
+            task({ id: 2, weight: 0.5, planned_cost: '200.20' }),
+        ],
+    );
+
+    assert.equal(report.metrics.plannedCost, 300.3);
+    assert.equal(report.metrics.budgetDelta, 0);
+    assert.ok(!codes(report).includes('BUDGET_VARIANCE'));
 });
 
 test('shift preview preserves duration and propagates using the latest predecessor', () => {
@@ -164,6 +190,21 @@ test('shift preview is rejected while any cycle exists', () => {
     }), error => error.code === 'DEPENDENCY_CYCLE' && error.statusCode === 422);
 });
 
+test('shift preview is also rejected when the plan contains a self-dependency', () => {
+    const tasks = [
+        task({ id: 1, weight: 0.25, predecessors: [1] }),
+        task({ id: 2, weight: 0.25, planned_end: '2026-01-08' }),
+        task({ id: 3, weight: 0.5, planned_start: '2026-01-05', planned_end: '2026-01-10', predecessors: [2] }),
+    ];
+
+    const report = evaluatePlanReadiness(project, wbs, tasks);
+    const conflict = report.findings.find(item => item.code === 'DATE_ORDER_CONFLICT');
+    assert.equal(conflict.previewAvailable, false);
+    assert.throws(() => previewDependencyRemedy(project, wbs, tasks, {
+        predecessorId: 2, successorId: 3, remedy: 'shift_successor_chain',
+    }), error => error.code === 'DEPENDENCY_CYCLE' && error.statusCode === 422);
+});
+
 test('findings are returned in deterministic severity and code order', () => {
     const first = evaluatePlanReadiness(project, wbs, [task({ weight: 0.5, planned_cost: 0, planned_hours: 0 })]);
     const second = evaluatePlanReadiness(project, wbs, [task({ weight: 0.5, planned_cost: 0, planned_hours: 0 })]);
@@ -195,4 +236,46 @@ test('1,000-task readiness fixture stays below 300 ms at p95 locally', () => {
 
     const p95 = samples[Math.ceil(samples.length * 0.95) - 1];
     assert.ok(p95 < 300, `Expected p95 below 300 ms, received ${p95.toFixed(1)} ms`);
+});
+
+test('weights outside 0-100% are blocked even when they sum to exactly 100%', () => {
+    const report = evaluatePlanReadiness(project, wbs, [
+        task({ id: 1, weight: -0.5 }),
+        task({ id: 2, task_name: 'Task 2', weight: 1.5, planned_start: '2026-01-06', planned_end: '2026-01-10' }),
+    ]);
+
+    const finding = report.findings.find(item => item.code === 'WEIGHT_OUT_OF_RANGE');
+    assert.ok(finding, 'expected WEIGHT_OUT_OF_RANGE');
+    assert.equal(finding.severity, 'blocker');
+    assert.deepEqual(finding.taskIds, [1, 2]);
+    assert.equal(report.state, 'blocked');
+    // Totals still reconcile, which is exactly why the aggregate check misses this.
+    assert.equal(report.metrics.totalWeight, 1);
+});
+
+test('the report depends on the plan, not on database row order', () => {
+    const tasks = [
+        task({ id: 1, weight: 0.34, planned_cost: 0 }),
+        task({ id: 2, task_name: 'Task 2', weight: 0.33, planned_cost: 0, planned_start: '2026-01-06', planned_end: '2026-01-10' }),
+        task({ id: 3, task_name: 'Task 3', weight: 0.33, planned_cost: 0, planned_start: '2026-01-11', planned_end: '2026-01-15' }),
+    ];
+    const orderings = [
+        [tasks[0], tasks[1], tasks[2]],
+        [tasks[2], tasks[0], tasks[1]],
+        [tasks[1], tasks[2], tasks[0]],
+    ];
+
+    const [first, ...rest] = orderings.map(rows => JSON.stringify(evaluatePlanReadiness(project, wbs, rows)));
+    rest.forEach(payload => assert.equal(payload, first));
+});
+
+test('a repeated predecessor id counts as one relationship', () => {
+    const report = evaluatePlanReadiness(project, wbs, [
+        task({ id: 1, weight: 0.5, planned_end: '2026-01-20' }),
+        task({ id: 2, task_name: 'Task 2', weight: 0.5, planned_start: '2026-01-10', planned_end: '2026-01-25', predecessors: [1, 1] }),
+    ]);
+
+    const conflicts = report.findings.filter(item => item.code === 'DATE_ORDER_CONFLICT');
+    assert.equal(conflicts.length, 1);
+    assert.equal(report.summary.blockers, 1);
 });

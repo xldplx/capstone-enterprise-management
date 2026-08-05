@@ -103,6 +103,23 @@ function loadReadinessController(supabase) {
     return require(controllerPath);
 }
 
+function loadWbsController({ supabase, requirePlanningUnlocked = async () => {} }) {
+    const controllerPath = require.resolve('../controllers/wbsController');
+    installMock(require.resolve('../config/db'), supabase);
+    installMock(require.resolve('../services/planningLockService'), { requirePlanningUnlocked });
+    delete require.cache[controllerPath];
+    return require(controllerPath);
+}
+
+function loadProjectsController({ supabase, requirePlanningUnlocked = async () => {}, writeAudit = async () => {} }) {
+    const controllerPath = require.resolve('../controllers/projectsController');
+    installMock(require.resolve('../config/db'), supabase);
+    installMock(require.resolve('../services/planningLockService'), { requirePlanningUnlocked });
+    installMock(require.resolve('../controllers/auditController'), { writeAudit });
+    delete require.cache[controllerPath];
+    return require(controllerPath);
+}
+
 const project = {
     id: 1,
     project_name: 'Delivery',
@@ -203,6 +220,224 @@ test('planning task updates are rejected after lock while actual updates continu
     assert.equal(actualResponse.statusCode, 200);
     assert.equal(actualResponse.body.data.actual_cost, 25);
     assert.equal(lockChecks, 1);
+});
+
+test('schedule_pct cannot change after the baseline is locked', async () => {
+    const lockedError = Object.assign(new Error('Planning locked.'), { statusCode: 409, code: 'BASELINE_LOCKED' });
+    const supabase = fakeSupabase({ projects: [{ ...project, schedule_pct: 0.25 }] });
+    const controller = loadProjectsController({
+        supabase,
+        requirePlanningUnlocked: async () => { throw lockedError; },
+    });
+    const response = responseRecorder();
+
+    await controller.updateProject({
+        params: { id: '1' }, body: { schedule_pct: 0.75 }, user: { username: 'pm' }, headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 409);
+    assert.equal(response.body.code, 'BASELINE_LOCKED');
+    assert.equal(supabase.tables.projects[0].schedule_pct, 0.25);
+});
+
+test('schedule_pct input is rejected outside the 0-1 range', async () => {
+    const supabase = fakeSupabase({ projects: [{ ...project, schedule_pct: 0.25 }] });
+    const controller = loadProjectsController({ supabase });
+    const response = responseRecorder();
+
+    await controller.updateProject({
+        params: { id: '1' }, body: { schedule_pct: 1.5 }, user: { username: 'pm' }, headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'INVALID_SCHEDULE_PCT');
+    assert.equal(supabase.tables.projects[0].schedule_pct, 0.25);
+});
+
+test('task schedule progress compares Jakarta calendar days without a UTC offset', async () => {
+    const RealDate = global.Date;
+    global.Date = class extends RealDate {
+        constructor(...args) {
+            super(...(args.length ? args : ['2026-04-02T00:30:00+07:00']));
+        }
+    };
+
+    try {
+        const supabase = fakeSupabase({ tasks: [plannedTask({
+            planned_start: '2026-04-01',
+            planned_end: '2026-04-03',
+        })] });
+        const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+        const response = responseRecorder();
+
+        await controller.getTasksByProject({ params: { projectId: '1' } }, response);
+
+        assert.equal(response.body.data[0].schedule_pct, 0.5);
+    } finally {
+        global.Date = RealDate;
+    }
+});
+
+test('WBS creation rejects a parent from another project', async () => {
+    const foreignParent = { id: 20, project_id: 2, parent_id: null, wbs_code: '1', name: 'Foreign', level: 1 };
+    const supabase = fakeSupabase({ wbs: [foreignParent] });
+    const controller = loadWbsController({ supabase });
+    const response = responseRecorder();
+
+    await controller.createWbsNode({
+        params: { projectId: '1' },
+        body: { parent_id: 20, wbs_code: '1.1', name: 'Invalid child', level: 2 },
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'INVALID_WBS_PARENT');
+    assert.equal(supabase.tables.wbs.length, 1);
+});
+
+test('WBS deletion stops when the linked-task safety lookup fails', async () => {
+    const node = { id: 10, project_id: 1, parent_id: null, wbs_code: '1', name: 'Root', level: 1 };
+    const supabase = fakeSupabase({ wbs: [node], tasks: [] });
+    const realFrom = supabase.from.bind(supabase);
+    supabase.from = (table) => {
+        const query = realFrom(table);
+        if (table === 'tasks') query.execute = async () => ({ data: null, error: { message: 'lookup failed' } });
+        return query;
+    };
+    const controller = loadWbsController({ supabase });
+    const response = responseRecorder();
+
+    await controller.deleteWbsNode({ params: { projectId: '1', id: '10' } }, response);
+
+    assert.equal(response.statusCode, 500);
+    assert.equal(supabase.tables.wbs.length, 1);
+});
+
+// The three lock writes are not transactional. Ordering the baseline insert last
+// means a partial failure leaves the project unlocked and retryable, instead of
+// permanently locked with no unlock route.
+test('a failed task write during lock leaves no baseline row, so the lock can be retried', async () => {
+    const tasks = [
+        plannedTask({ id: 1, weight: 0.5 }),
+        plannedTask({ id: 2, task_name: 'Task 2', weight: 0.5, planned_start: '2026-01-06', planned_end: '2026-01-10' }),
+    ];
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks, baselines: [] });
+
+    const realFrom = supabase.from.bind(supabase);
+    supabase.from = (table) => {
+        const query = realFrom(table);
+        if (table !== 'tasks') return query;
+        const realUpdate = query.update.bind(query);
+        query.update = (payload) => {
+            realUpdate(payload);
+            query.execute = async () => ({ data: null, error: { message: 'connection lost' } });
+            return query;
+        };
+        return query;
+    };
+
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.lockBaseline({
+        params: { projectId: '1' }, body: {}, user: { username: 'pm' }, headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 500);
+    assert.equal(supabase.tables.baselines.length, 0);
+    assert.equal(supabase.operations.some(op => op.table === 'baselines' && op.action === 'insert'), false);
+});
+
+test('bulk import resolves wbs_code to wbs_id so imported tasks are linked', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ wbs_code: '1.1', task_name: 'Imported', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, response);
+
+    assert.equal(response.statusCode, 201);
+    const insert = supabase.operations.find(operation => operation.table === 'tasks' && operation.action === 'insert');
+    assert.equal(insert.payload[0].wbs_id, 10);
+    assert.equal(insert.payload[0].wbs_code, '1.1');
+});
+
+test('bulk import rejects unknown wbs codes without inserting anything', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [
+            { wbs_code: '1.1', task_name: 'Good', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+            { wbs_code: '9.9', task_name: 'Orphan', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+        ] },
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'UNKNOWN_WBS_CODE');
+    assert.match(response.body.message, /9\.9/);
+    assert.equal(supabase.operations.some(operation => operation.action === 'insert'), false);
+});
+
+test('bulk import rejects a blank task name without inserting anything', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+    const response = responseRecorder();
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ wbs_code: '1.1', task_name: '   ', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.code, 'INVALID_TASK_NAME');
+    assert.equal(supabase.operations.some(operation => operation.action === 'insert'), false);
+});
+
+test('wbs code matching tolerates stray whitespace and names a blank code', async () => {
+    const padded = [{ id: 10, project_id: 1, wbs_code: '1.1 ', name: 'Delivery' }];
+    const supabase = fakeSupabase({ projects: [project], wbs: padded, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+
+    const ok = responseRecorder();
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ wbs_code: '1.1', task_name: 'Padded', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, ok);
+    assert.equal(ok.statusCode, 201);
+    assert.equal(supabase.operations.find(op => op.table === 'tasks' && op.action === 'insert').payload[0].wbs_id, 10);
+
+    const blank = responseRecorder();
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [{ task_name: 'No code', planned_cost: 100, planned_hours: 8, weight: 1 }] },
+    }, blank);
+    assert.equal(blank.statusCode, 400);
+    assert.match(blank.body.message, /\(blank\)/);
+});
+
+// Guards the whole demo path: import -> readiness -> lock. Before the wbs_id fix
+// every imported task raised MISSING_WBS and the baseline could never be locked.
+test('bulk-imported tasks pass readiness without MISSING_WBS', async () => {
+    const supabase = fakeSupabase({ projects: [project], wbs, tasks: [] });
+    const controller = loadTasksController({ supabase, requirePlanningUnlocked: async () => {} });
+
+    await controller.bulkImportTasks({
+        params: { projectId: '1' },
+        body: { tasks: [
+            { wbs_code: '1.1', task_name: 'A', planned_start: '2026-01-01', planned_end: '2026-01-05', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+            { wbs_code: '1.1', task_name: 'B', planned_start: '2026-01-06', planned_end: '2026-01-10', planned_cost: 100, planned_hours: 8, weight: 0.5 },
+        ] },
+    }, responseRecorder());
+
+    const { evaluatePlanReadiness } = require('../services/planningReadinessService');
+    const report = evaluatePlanReadiness(project, wbs, supabase.tables.tasks);
+
+    assert.equal(report.findings.some(finding => finding.code === 'MISSING_WBS'), false);
+    assert.equal(report.summary.blockers, 0);
 });
 
 test('dependency preview reads project data without insert, update or delete', async () => {

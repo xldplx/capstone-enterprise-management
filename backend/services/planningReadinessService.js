@@ -37,14 +37,22 @@ function taskLabel(task) {
     return task?.task_name || `Task ${task?.id}`;
 }
 
+// Findings are built by filtering the incoming task array, so taskIds would
+// otherwise inherit whatever order the database happened to return. Sort them
+// to make the whole report depend on the plan, not on row order.
+function sortIds(ids) {
+    return ids.map(comparableId)
+        .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+}
+
 function makeFinding({ code, severity, title, explanation, taskIds = [], wbsIds = [], edge = null, previewAvailable = false }) {
     return {
         code,
         severity,
         title,
         explanation,
-        taskIds: taskIds.map(comparableId),
-        ...(wbsIds.length ? { wbsIds: wbsIds.map(comparableId) } : {}),
+        taskIds: sortIds(taskIds),
+        ...(wbsIds.length ? { wbsIds: sortIds(wbsIds) } : {}),
         ...(edge ? {
             edge: {
                 predecessorId: comparableId(edge.predecessorId),
@@ -55,16 +63,77 @@ function makeFinding({ code, severity, title, explanation, taskIds = [], wbsIds 
     };
 }
 
+// A task listing the same predecessor twice describes one relationship, not two.
+// Dedupe centrally so the graph, the edge findings and the connectivity check all
+// agree — otherwise a repeated id double-counts blockers in the summary.
+function predecessorsOf(task) {
+    const list = Array.isArray(task?.predecessors) ? task.predecessors : [];
+    return [...new Map(list.map(id => [keyOf(id), id])).values()];
+}
+
+// Kahn's algorithm leaves both a cycle and every task blocked downstream of it
+// unscheduled. Use strongly connected components to distinguish the tasks that
+// actually participate in a loop from tasks that merely depend on one.
+function cycleKeysFor(successors, candidateKeys) {
+    const candidates = new Set(candidateKeys);
+    const indexByKey = new Map();
+    const lowLinkByKey = new Map();
+    const stack = [];
+    const onStack = new Set();
+    const cycleKeys = [];
+    let nextIndex = 0;
+
+    function visit(taskKey) {
+        indexByKey.set(taskKey, nextIndex);
+        lowLinkByKey.set(taskKey, nextIndex);
+        nextIndex += 1;
+        stack.push(taskKey);
+        onStack.add(taskKey);
+
+        for (const successorKey of successors.get(taskKey) || []) {
+            if (!candidates.has(successorKey)) continue;
+            if (!indexByKey.has(successorKey)) {
+                visit(successorKey);
+                lowLinkByKey.set(taskKey, Math.min(lowLinkByKey.get(taskKey), lowLinkByKey.get(successorKey)));
+            } else if (onStack.has(successorKey)) {
+                lowLinkByKey.set(taskKey, Math.min(lowLinkByKey.get(taskKey), indexByKey.get(successorKey)));
+            }
+        }
+
+        if (lowLinkByKey.get(taskKey) !== indexByKey.get(taskKey)) return;
+
+        const component = [];
+        let member;
+        do {
+            member = stack.pop();
+            onStack.delete(member);
+            component.push(member);
+        } while (member !== taskKey);
+
+        if (component.length > 1) cycleKeys.push(...component);
+    }
+
+    for (const taskKey of candidateKeys) {
+        if (!indexByKey.has(taskKey)) visit(taskKey);
+    }
+    return cycleKeys;
+}
+
 function graphFor(tasks) {
     const taskMap = new Map(tasks.map(task => [keyOf(task.id), task]));
     const successors = new Map(tasks.map(task => [keyOf(task.id), []]));
     const indegree = new Map(tasks.map(task => [keyOf(task.id), 0]));
+    const selfLoopKeys = new Set();
 
     for (const task of tasks) {
         const successorKey = keyOf(task.id);
-        for (const predecessorId of Array.isArray(task.predecessors) ? task.predecessors : []) {
+        for (const predecessorId of predecessorsOf(task)) {
             const predecessorKey = keyOf(predecessorId);
-            if (!taskMap.has(predecessorKey) || predecessorKey === successorKey) continue;
+            if (!taskMap.has(predecessorKey)) continue;
+            if (predecessorKey === successorKey) {
+                selfLoopKeys.add(successorKey);
+                continue;
+            }
             successors.get(predecessorKey).push(successorKey);
             indegree.set(successorKey, indegree.get(successorKey) + 1);
         }
@@ -92,8 +161,9 @@ function graphFor(tasks) {
     }
 
     const orderedKeys = new Set(order);
-    const cycleKeys = [...taskMap.keys()].filter(id => !orderedKeys.has(id));
-    return { taskMap, successors, order, cycleKeys };
+    const blockedKeys = [...taskMap.keys()].filter(id => !orderedKeys.has(id));
+    const cycleKeys = cycleKeysFor(successors, blockedKeys);
+    return { taskMap, successors, order, cycleKeys, selfLoopKeys: [...selfLoopKeys] };
 }
 
 function findingIdentity(finding) {
@@ -111,6 +181,11 @@ function summarize(findings) {
     }, { blockers: 0, warnings: 0, info: 0 });
 }
 
+function toCurrencyMinorUnits(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.round(numeric * 100) : 0;
+}
+
 function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
     const findings = [];
     const wbsIds = new Set((wbsNodes || []).map(node => keyOf(node.id)));
@@ -119,6 +194,7 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
     const projectEnd = parseUtcDay(project.planned_end);
     const graph = graphFor(tasks || []);
     const hasCycle = graph.cycleKeys.length > 0;
+    const hasDependencyLoop = hasCycle || graph.selfLoopKeys.length > 0;
 
     if (!tasks || tasks.length === 0) {
         findings.push(makeFinding({
@@ -160,6 +236,20 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
         }
     }
 
+    // The total-weight check alone lets a plan through when out-of-range weights
+    // cancel out (-0.5 and 1.5 sum to exactly 1.0). Bound each task as well.
+    const outOfRangeWeights = (tasks || []).filter(task => {
+        const weight = Number(task.weight) || 0;
+        return weight < 0 || weight > 1;
+    });
+    if (outOfRangeWeights.length) {
+        findings.push(makeFinding({
+            code: 'WEIGHT_OUT_OF_RANGE', severity: 'blocker', title: 'Task weights are outside 0–100%',
+            explanation: `${outOfRangeWeights.length} task${outOfRangeWeights.length === 1 ? '' : 's'} have a weight below 0% or above 100%.`,
+            taskIds: outOfRangeWeights.map(task => task.id),
+        }));
+    }
+
     const totalWeight = (tasks || []).reduce((sum, task) => sum + (Number(task.weight) || 0), 0);
     if (tasks?.length && (totalWeight < 0.999 || totalWeight > 1.001)) {
         findings.push(makeFinding({
@@ -171,7 +261,7 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
 
     for (const task of tasks || []) {
         const successorKey = keyOf(task.id);
-        for (const predecessorId of Array.isArray(task.predecessors) ? task.predecessors : []) {
+        for (const predecessorId of predecessorsOf(task)) {
             const predecessorKey = keyOf(predecessorId);
             if (predecessorKey === successorKey) {
                 findings.push(makeFinding({
@@ -198,7 +288,7 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
                     explanation: `${taskLabel(task)} starts before ${taskLabel(predecessor)} finishes.`,
                     taskIds: [predecessor.id, task.id],
                     edge: { predecessorId: predecessor.id, successorId: task.id },
-                    previewAvailable: !hasCycle,
+                    previewAvailable: !hasDependencyLoop,
                 }));
             }
         }
@@ -212,9 +302,8 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
         }));
     }
 
-    const validEdgeCount = (tasks || []).reduce((count, task) => count + (Array.isArray(task.predecessors)
-        ? task.predecessors.filter(id => taskMap.has(keyOf(id)) && keyOf(id) !== keyOf(task.id)).length
-        : 0), 0);
+    const validEdgeCount = (tasks || []).reduce((count, task) => count
+        + predecessorsOf(task).filter(id => taskMap.has(keyOf(id)) && keyOf(id) !== keyOf(task.id)).length, 0);
     if ((tasks || []).length > 1 && validEdgeCount === 0) {
         findings.push(makeFinding({
             code: 'NO_DEPENDENCY_NETWORK', severity: 'warning', title: 'Plan has no dependency network',
@@ -224,7 +313,7 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
     } else if ((tasks || []).length > 1) {
         const connected = new Set();
         for (const task of tasks) {
-            for (const predecessorId of Array.isArray(task.predecessors) ? task.predecessors : []) {
+            for (const predecessorId of predecessorsOf(task)) {
                 if (taskMap.has(keyOf(predecessorId)) && keyOf(predecessorId) !== keyOf(task.id)) {
                     connected.add(keyOf(task.id));
                     connected.add(keyOf(predecessorId));
@@ -253,9 +342,14 @@ function evaluatePlanReadiness(project = {}, wbsNodes = [], tasks = []) {
         taskIds: zeroHours.map(task => task.id),
     }));
 
-    const plannedCost = (tasks || []).reduce((sum, task) => sum + (Number(task.planned_cost) || 0), 0);
-    const projectBudget = Number(project.total_budget) || 0;
-    const budgetDelta = projectBudget - plannedCost;
+    // Supabase NUMERIC(18,2) values arrive as decimal strings. Compare and sum
+    // them in minor currency units so reconciled values such as 100.10 + 200.20
+    // do not create a binary floating-point variance.
+    const plannedCostMinor = (tasks || []).reduce((sum, task) => sum + toCurrencyMinorUnits(task.planned_cost), 0);
+    const projectBudgetMinor = toCurrencyMinorUnits(project.total_budget);
+    const plannedCost = plannedCostMinor / 100;
+    const projectBudget = projectBudgetMinor / 100;
+    const budgetDelta = (projectBudgetMinor - plannedCostMinor) / 100;
     if (budgetDelta !== 0) findings.push(makeFinding({
         code: 'BUDGET_VARIANCE', severity: 'info', title: 'Project budget differs from planned task cost',
         explanation: `Budget variance is IDR ${Math.abs(budgetDelta).toLocaleString('en-US')}${budgetDelta >= 0 ? ' remaining' : ' over budget'}.`,
