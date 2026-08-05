@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+
 import {
     LayoutDashboard, Users, LogOut, ChevronUp, User, Settings,
     FolderKanban, ClipboardList, BarChart3, Bell, Upload,
@@ -39,11 +40,35 @@ import Report       from './features/Report';
 import MyProfile    from './features/MyProfile';
 import ErrorBoundary from '../../components/ErrorBoundary';
 
+const PAGE_SLUGS = {
+    'Overview':       'overview',
+    'Analytics':      'analytics',
+    'Plan vs Actual': 'plan-vs-actual',
+    'Projects':       'projects',
+    'Daily Actuals':  'daily-actuals',
+    'Manpower':       'manpower',
+    'Equipment':      'equipment',
+    'Materials':      'materials',
+    'Consumables':    'consumables',
+    'Tools':          'tools',
+    'Budget':         'budget',
+    'Alerts':         'alerts',
+    'Report':         'report',
+    'Excel Import':   'excel-import',
+    'Settings':       'settings',
+    'MyProfile':      'my-profile',
+};
+
+const SLUG_TO_PAGE = Object.fromEntries(
+    Object.entries(PAGE_SLUGS).map(([page, slug]) => [slug, page])
+);
+
 export default function DashboardLayout() {
     const navigate = useNavigate();
+    const { tab } = useParams();
     const { t } = useTranslation();
 
-    const [activePage, setActivePage]     = useState('Overview');
+    const [activePage, setActivePage]     = useState(() => (tab && SLUG_TO_PAGE[tab]) ? SLUG_TO_PAGE[tab] : 'Overview');
     const [pendingProjectId, setPendingProjectId] = useState(null);
     const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
     const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -55,6 +80,14 @@ export default function DashboardLayout() {
     const userRole = localStorage.getItem('userRole') || 'Guest';
     const userName = localStorage.getItem('userName') || 'User';
 
+    useEffect(() => {
+        if (tab && SLUG_TO_PAGE[tab]) {
+            setActivePage(SLUG_TO_PAGE[tab]);
+        } else if (!tab) {
+            navigate('/dashboard/overview', { replace: true });
+        }
+    }, [tab, navigate]);
+
     const handleLogout = () => {
         localStorage.clear();
         navigate('/login');
@@ -63,7 +96,8 @@ export default function DashboardLayout() {
     // Cross-page navigation (e.g. an Alert deep-linking into its project).
     const navigateTo = (page, projectId = null) => {
         if (projectId != null) setPendingProjectId(projectId);
-        setActivePage(page);
+        const slug = PAGE_SLUGS[page] || 'overview';
+        navigate(`/dashboard/${slug}`);
     };
 
     useEffect(() => {
@@ -204,7 +238,7 @@ export default function DashboardLayout() {
                         return (
                             <button 
                                 key={item.id} 
-                                onClick={() => setActivePage(item.id)}
+                                onClick={() => navigateTo(item.id)}
                                 className={`w-full flex items-center rounded-xl text-xs font-bold transition-all duration-300 group text-left ${
                                     isActive
                                         ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-950/30'
@@ -236,15 +270,16 @@ export default function DashboardLayout() {
                     }`}>
                         <div className="p-1.5 space-y-0.5">
                             <button
-                                onClick={() => { setActivePage('MyProfile'); setIsUserMenuOpen(false); }}
+                                onClick={() => { navigateTo('MyProfile'); setIsUserMenuOpen(false); }}
                                 className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-slate-300 hover:bg-slate-850 hover:text-white rounded-lg transition-colors text-left">
                                 <User className="w-4 h-4 text-slate-400" /> My Profile
                             </button>
                             <button
-                                onClick={() => { setActivePage('Settings'); setIsUserMenuOpen(false); }}
+                                onClick={() => { navigateTo('Settings'); setIsUserMenuOpen(false); }}
                                 className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-slate-300 hover:bg-slate-850 hover:text-white rounded-lg transition-colors text-left">
                                 <Settings className="w-4 h-4 text-slate-400" /> {t('nav.settings')}
                             </button>
+
                             <div className="h-px bg-slate-800 my-1 mx-2" />
                             <button onClick={handleLogout}
                                 className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-rose-400 hover:bg-rose-950/20 rounded-lg transition-colors text-left">
