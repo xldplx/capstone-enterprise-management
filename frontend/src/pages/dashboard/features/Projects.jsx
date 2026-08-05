@@ -361,25 +361,42 @@ export default function Projects({ initialProjectId = null, onConsumeInitial }) 
                             </div>
 
                             <div>
-                                {/* Footer: date + budget */}
-                                <div className="grid grid-cols-2 gap-3 text-xs text-slate-400 border-t border-slate-100 pt-3.5">
-                                    <div className="flex items-center gap-1.5">
-                                        <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                        <span className="font-semibold text-slate-500">{project.planned_start ? formatDate(project.planned_start) : '—'}</span>
+                                {/* Footer: date + budget & remaining breakdown */}
+                                <div className="space-y-2 border-t border-slate-100 pt-3.5 text-xs text-slate-400">
+                                    <div className="flex justify-between items-center">
+                                        <div className="flex items-center gap-1.5">
+                                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                            <span className="font-semibold text-slate-500">{project.planned_start ? formatDate(project.planned_start) : '—'}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <DollarSign className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                            <span className="font-bold text-slate-700">{formatCurrency(project.total_budget)}</span>
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-1.5 justify-end">
-                                        <DollarSign className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                        <span className="font-semibold text-slate-500" title="Project Total Budget (IDR)">Budget (IDR): {formatCurrency(project.total_budget)}</span>
-                                    </div>
+
+                                    {/* Auto-Reduced Budget Bar */}
+                                    {project.allocated_budget !== undefined && (
+                                        <div className="pt-1.5 border-t border-slate-100/60 flex items-center justify-between text-[11px]">
+                                            <span className="font-semibold text-slate-400">Remaining Budget:</span>
+                                            <span className={`font-mono font-bold px-2 py-0.5 rounded-lg border text-[10px] ${
+                                                (project.remaining_budget ?? 0) < 0 
+                                                    ? 'bg-rose-50 border-rose-200 text-rose-600' 
+                                                    : 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                                            }`}>
+                                                {formatCurrency(project.remaining_budget ?? (project.total_budget - project.allocated_budget))}
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Hover Arrow */}
-                                <div className="mt-3.5 flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="mt-3 flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                                     <div className="text-emerald-600 flex items-center gap-1 text-[11px] font-black uppercase tracking-wider">
                                         Open Project <ChevronRight className="w-3.5 h-3.5" />
                                     </div>
                                 </div>
                             </div>
+
                         </div>
                         );
                     })}

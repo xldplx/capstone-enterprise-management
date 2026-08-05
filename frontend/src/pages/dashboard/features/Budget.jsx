@@ -521,12 +521,35 @@ export default function Budget() {
                                 </div>
                             )}
 
+                            {/* Live Auto-Reduced Remaining Budget Preview */}
+                            <div className={`p-3.5 rounded-xl border text-xs space-y-1 ${
+                                projectedOverage > 0 
+                                    ? 'bg-rose-50 border-rose-200 text-rose-800' 
+                                    : 'bg-emerald-50 border-emerald-100 text-emerald-800'
+                            }`}>
+                                <div className="flex justify-between items-center font-bold">
+                                    <span>Total Project Budget:</span>
+                                    <span className="font-mono">{formatCurrency(projectBudget)}</span>
+                                </div>
+                                <div className="flex justify-between items-center font-medium opacity-80">
+                                    <span>Remaining Available Budget:</span>
+                                    <span className="font-mono">{formatCurrency(allocationBalance)}</span>
+                                </div>
+                                <div className="flex justify-between items-center font-black pt-1 border-t border-black/5">
+                                    <span>Budget Remaining After Entry:</span>
+                                    <span className="font-mono">
+                                        {formatCurrency(projectBudget - projectedAllocation)}
+                                    </span>
+                                </div>
+                            </div>
+
                             {projectedOverage > 0 && (
                                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2" role="status">
                                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                                     Saving is allowed, but this allocation will exceed Project Total Budget by {formatCurrency(projectedOverage)}.
                                 </div>
                             )}
+
 
                             <div className="flex gap-3 pt-4">
                                 <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-semibold hover:bg-slate-200 transition-all">{t('common.cancel')}</button>

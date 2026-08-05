@@ -71,6 +71,19 @@ function withSchedulePct(project, tasks) {
         : { ...project, schedule_pct: derived };
 }
 
+function withBudgetAndSchedule(project, tasks = [], budgetItems = []) {
+    const projectWithSchedule = withSchedulePct(project, tasks);
+    const totalBudget = parseFloat(project.total_budget || 0);
+    const allocatedBudget = budgetItems.reduce((acc, item) => acc + (parseFloat(item.planned) || 0), 0);
+    const remainingBudget = totalBudget - allocatedBudget;
+
+    return {
+        ...projectWithSchedule,
+        allocated_budget: allocatedBudget,
+        remaining_budget: remainingBudget,
+    };
+}
+
 const getAllProjects = async (req, res) => {
     try {
         const { data, error } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
@@ -79,10 +92,12 @@ const getAllProjects = async (req, res) => {
         const projects = data || [];
         if (projects.length === 0) return res.json({ success: true, data: [] });
 
-        // One extra query for the whole list, not one per project.
-        const { data: tasks } = await supabase
-            .from('tasks').select('project_id, planned_cost, planned_start, planned_end')
-            .in('project_id', projects.map(project => project.id));
+        const projectIds = projects.map(project => project.id);
+
+        const [{ data: tasks }, { data: budgetItems }] = await Promise.all([
+            supabase.from('tasks').select('project_id, planned_cost, planned_start, planned_end').in('project_id', projectIds),
+            supabase.from('budget').select('project_id, planned').in('project_id', projectIds),
+        ]);
 
         const tasksByProject = new Map();
         for (const task of tasks || []) {
@@ -91,9 +106,20 @@ const getAllProjects = async (req, res) => {
             tasksByProject.set(task.project_id, list);
         }
 
+        const budgetByProject = new Map();
+        for (const item of budgetItems || []) {
+            const list = budgetByProject.get(item.project_id) || [];
+            list.push(item);
+            budgetByProject.set(item.project_id, list);
+        }
+
         res.json({
             success: true,
-            data: projects.map(project => withSchedulePct(project, tasksByProject.get(project.id) || [])),
+            data: projects.map(project => withBudgetAndSchedule(
+                project,
+                tasksByProject.get(project.id) || [],
+                budgetByProject.get(project.id) || []
+            )),
         });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -103,13 +129,15 @@ const getProjectById = async (req, res) => {
         const { data, error } = await supabase.from('projects').select('*').eq('id', req.params.id).single();
         if (error) return res.status(404).json({ success: false, message: 'Project not found.' });
 
-        const { data: tasks } = await supabase
-            .from('tasks').select('planned_cost, planned_start, planned_end')
-            .eq('project_id', req.params.id);
+        const [{ data: tasks }, { data: budgetItems }] = await Promise.all([
+            supabase.from('tasks').select('planned_cost, planned_start, planned_end').eq('project_id', req.params.id),
+            supabase.from('budget').select('planned').eq('project_id', req.params.id),
+        ]);
 
-        res.json({ success: true, data: withSchedulePct(data, tasks || []) });
+        res.json({ success: true, data: withBudgetAndSchedule(data, tasks || [], budgetItems || []) });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
+
 
 const createProject = async (req, res) => {
     const { project_name, project_code, description, planned_start, planned_end, total_budget, schedule_pct } = req.body;
