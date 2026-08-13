@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
     Plus, Wallet, X, Loader2, CheckCircle2,
-    Activity as ActivityIcon, Pencil, Trash2, AlertTriangle, RefreshCw, Link2, Download
+    Activity as ActivityIcon, Pencil, Trash2, AlertTriangle, RefreshCw, Link2, Download,
+    User, Building2, UserCheck, PieChart, Filter
 } from 'lucide-react';
 import { BarChart, Bar, CartesianGrid, Cell, LabelList, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { formatCurrency } from '../../../utils/evmHelpers';
@@ -14,7 +15,7 @@ import { formatCompactWholeNumber, parseGroupedWholeNumber } from '../../../util
 import { budgetCategoryView } from '../../../utils/resourceMetrics';
 
 const VALID_TYPES = ['CAPEX', 'OPEX'];
-const EMPTY_FORM  = { category: '', type: 'CAPEX', planned: '', actual: '', wbs_id: '' };
+const EMPTY_FORM  = { category: '', type: 'CAPEX', planned: '', actual: '', wbs_id: '', responsible_person: '', cost_center: '' };
 
 export default function Budget() {
     const { t } = useTranslation();
@@ -25,6 +26,10 @@ export default function Budget() {
     const [categories, setCategories]               = useState([]);
     const [loadingCats, setLoadingCats]             = useState(false);
     const [wbsNodes, setWbsNodes]                   = useState([]);
+    const [systemUsers, setSystemUsers]             = useState([]);
+
+    const [ownerFilter, setOwnerFilter]             = useState('ALL');
+    const [costCenterFilter, setCostCenterFilter]   = useState('ALL');
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingRow, setEditingRow]   = useState(null);
@@ -49,16 +54,19 @@ export default function Budget() {
         setTimeout(() => setToast({ msg: '', type: 'success' }), 3000);
     };
 
-    // ── Fetch projects ────────────────────────────────────────────────────────
+    // ── Fetch projects & users ────────────────────────────────────────────────
     useEffect(() => {
         setIsLoadingProjects(true);
-        apiFetch('/projects')
-            .then(r => {
-                const list = r.data || [];
+        Promise.all([
+            apiFetch('/projects').catch(() => ({ data: [] })),
+            apiFetch('/users').catch(() => ({ data: [] })),
+        ])
+            .then(([pRes, uRes]) => {
+                const list = pRes.data || [];
                 setProjects(list);
                 if (list.length > 0) setSelectedProjectId(String(list[0].id));
+                setSystemUsers(uRes.data || []);
             })
-            .catch(console.error)
             .finally(() => setIsLoadingProjects(false));
     }, []);
 
@@ -94,13 +102,61 @@ export default function Budget() {
         return { totalPlanned: tp, totalActual: ta, totalVariance: tp - ta, usagePct: tp > 0 ? (ta / tp) * 100 : 0 };
     }, [categories]);
 
-    const capexRows = categories.filter(c => c.type === 'CAPEX');
-    const opexRows  = categories.filter(c => c.type === 'OPEX');
+    // ── Responsibility Breakdown Aggregations ─────────────────────────────────
+    const responsibilityData = useMemo(() => {
+        const map = new Map();
+        const costCentersSet = new Set();
+        const ownersSet = new Set();
+
+        categories.forEach(c => {
+            const owner = (c.responsible_person && c.responsible_person.trim()) || t('budget.unassignedOwner');
+            const cc = (c.cost_center && c.cost_center.trim()) || null;
+            if (cc) costCentersSet.add(cc);
+            ownersSet.add(owner);
+
+            const prev = map.get(owner) || { owner, planned: 0, actual: 0, count: 0, overruns: 0, costCenters: new Set() };
+            const p = Number(c.planned) || 0;
+            const a = Number(c.actual) || 0;
+            prev.planned += p;
+            prev.actual += a;
+            prev.count += 1;
+            if (a > p && a > 0) prev.overruns += 1;
+            if (cc) prev.costCenters.add(cc);
+            map.set(owner, prev);
+        });
+
+        const breakdown = Array.from(map.values()).map(o => ({
+            ...o,
+            variance: o.planned - o.actual,
+            usagePct: o.planned > 0 ? (o.actual / o.planned) * 100 : 0,
+            costCentersList: Array.from(o.costCenters),
+        })).sort((a, b) => b.planned - a.planned);
+
+        return {
+            breakdown,
+            allOwners: Array.from(ownersSet).sort(),
+            allCostCenters: Array.from(costCentersSet).sort(),
+        };
+    }, [categories, t]);
+
+    // Filter categories based on owner & cost center filter
+    const filteredCategories = useMemo(() => {
+        return categories.filter(c => {
+            const owner = (c.responsible_person && c.responsible_person.trim()) || t('budget.unassignedOwner');
+            const cc = (c.cost_center && c.cost_center.trim()) || '';
+            if (ownerFilter !== 'ALL' && owner !== ownerFilter) return false;
+            if (costCenterFilter !== 'ALL' && cc !== costCenterFilter) return false;
+            return true;
+        });
+    }, [categories, ownerFilter, costCenterFilter, t]);
+
+    const capexRows = filteredCategories.filter(c => c.type === 'CAPEX');
+    const opexRows  = filteredCategories.filter(c => c.type === 'OPEX');
     const wbsLinkedRows = categories.filter(c => c.wbs_id && c.wbs);
     const projectBudget = Number(selectedProject?.total_budget) || 0;
     const allocationBalance = projectBudget - totalPlanned;
     const allocationPct = projectBudget > 0 ? (totalPlanned / projectBudget) * 100 : totalPlanned > 0 ? 100 : 0;
-    const chartRows = useMemo(() => budgetCategoryView(categories), [categories]);
+    const chartRows = useMemo(() => budgetCategoryView(filteredCategories), [filteredCategories]);
     const projectedPlanned = parseGroupedWholeNumber(form.planned) || 0;
     const projectedAllocation = totalPlanned - (editingRow ? Number(editingRow.planned) || 0 : 0) + projectedPlanned;
     const projectedOverage = Math.max(0, projectedAllocation - projectBudget);
@@ -112,7 +168,15 @@ export default function Budget() {
 
     const openEditModal = (row) => {
         setEditingRow(row);
-        setForm({ category: row.category, type: row.type, planned: String(row.planned), actual: String(row.actual || 0), wbs_id: row.wbs_id ? String(row.wbs_id) : '' });
+        setForm({
+            category: row.category,
+            type: row.type,
+            planned: String(row.planned),
+            actual: String(row.actual || 0),
+            wbs_id: row.wbs_id ? String(row.wbs_id) : '',
+            responsible_person: row.responsible_person || '',
+            cost_center: row.cost_center || '',
+        });
         setFormError(''); setIsModalOpen(true);
     };
 
@@ -127,7 +191,15 @@ export default function Budget() {
 
         setSaving(true);
         try {
-            const payload = { category: form.category.trim(), type: form.type, planned: plannedNum, actual: actualNum, wbs_id: form.wbs_id || null };
+            const payload = {
+                category: form.category.trim(),
+                type: form.type,
+                planned: plannedNum,
+                actual: actualNum,
+                wbs_id: form.wbs_id || null,
+                responsible_person: form.responsible_person.trim() || null,
+                cost_center: form.cost_center.trim() || null,
+            };
             if (editingRow) {
                 await apiFetch(`/budget/${editingRow.id}`, { method: 'PUT', body: JSON.stringify(payload) });
                 showToast(`"${form.category}" ${t('budget.updatedSuccess')}`);
@@ -179,13 +251,15 @@ export default function Budget() {
 
     // ── Export ────────────────────────────────────────────────────────────────
     const handleExport = () => {
-        const rows = categories.map((c) => ({
-            'Category':      c.category,
-            'Type':          c.type,
-            'WBS':           c.wbs?.wbs_code || '',
-            'Planned (IDR)': Number(c.planned) || 0,
-            'Actual (IDR)':  Number(c.actual) || 0,
-            'Variance':      (Number(c.planned) || 0) - (Number(c.actual) || 0),
+        const rows = filteredCategories.map((c) => ({
+            'Category':           c.category,
+            'Type':               c.type,
+            'Responsible Owner': c.responsible_person || 'Unassigned',
+            'Cost Center':        c.cost_center || '—',
+            'WBS':                c.wbs?.wbs_code || '',
+            'Planned (IDR)':      Number(c.planned) || 0,
+            'Actual (IDR)':       Number(c.actual) || 0,
+            'Variance':           (Number(c.planned) || 0) - (Number(c.actual) || 0),
         }));
         exportWorkbook(exportFilename('Budget', selectedProject?.project_code), [{ name: 'Budget', rows }]);
     };
@@ -197,6 +271,9 @@ export default function Budget() {
         const overrun  = (Number(row.actual) || 0) > (Number(row.planned) || 0) && (Number(row.actual) || 0) > 0;
         const varianceClass = overrun ? 'text-rose-600' : pct >= 90 ? 'text-amber-600' : 'text-emerald-600';
         const isSyncing = syncingId === row.id;
+        const ownerName = row.responsible_person?.trim() || t('budget.unassignedOwner');
+        const ownerInitials = ownerName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || 'UN';
+
         return (
             <tr key={row.id} className={`transition-colors group ${overrun ? 'bg-red-50/40 hover:bg-red-50/60' : 'hover:bg-slate-50/50'}`}>
                 <td className="px-6 py-4">
@@ -209,6 +286,23 @@ export default function Budget() {
                         )}
                         {!row.wbs && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-50 text-slate-500 border border-slate-200">Manual actual</span>}
                     </div>
+                </td>
+                <td className="px-6 py-4">
+                    <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] font-black text-slate-600 shrink-0">
+                            {ownerInitials}
+                        </div>
+                        <span className="text-xs font-semibold text-slate-700">{ownerName}</span>
+                    </div>
+                </td>
+                <td className="px-6 py-4">
+                    {row.cost_center ? (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-100 font-mono">
+                            {row.cost_center}
+                        </span>
+                    ) : (
+                        <span className="text-slate-300 text-xs">—</span>
+                    )}
                 </td>
                 <td className="px-6 py-4 text-slate-600 font-mono text-sm">{formatCurrency(row.planned)}</td>
                 <td className="px-6 py-4">
@@ -334,6 +428,88 @@ export default function Budget() {
                         </dl>
                     </section>
 
+                    {/* RESPONSIBILITY BREAKDOWN MATRIX */}
+                    {categories.length > 0 && (
+                        <section className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm" aria-labelledby="responsibility-breakdown-heading">
+                            <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                <div>
+                                    <h3 id="responsibility-breakdown-heading" className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                        <UserCheck className="w-5 h-5 text-emerald-600" /> {t('budget.responsibilityBreakdown')}
+                                    </h3>
+                                    <p className="text-xs text-slate-500 mt-1">Budget ownership, cost center breakdown, and variance tracking per responsible manager.</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{responsibilityData.breakdown.length} Owners</span>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {responsibilityData.breakdown.map((item) => {
+                                    const sharePct = totalPlanned > 0 ? (item.planned / totalPlanned) * 100 : 0;
+                                    const isOverrun = item.variance < 0;
+
+                                    return (
+                                        <div key={item.owner} className="p-5 rounded-2xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-slate-200 transition-all space-y-3">
+                                            <div className="flex items-start justify-between">
+                                                <div className="flex items-center gap-2.5">
+                                                    <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 font-bold flex items-center justify-center text-xs shrink-0">
+                                                        {item.owner.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+                                                    </div>
+                                                    <div>
+                                                        <h4 className="text-sm font-bold text-slate-800">{item.owner}</h4>
+                                                        <p className="text-[11px] font-medium text-slate-400">{item.count} category item{item.count > 1 ? 's' : ''}</p>
+                                                    </div>
+                                                </div>
+                                                {item.overruns > 0 && (
+                                                    <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">
+                                                        {item.overruns} Overrun
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {item.costCentersList.length > 0 && (
+                                                <div className="flex flex-wrap gap-1">
+                                                    {item.costCentersList.map(cc => (
+                                                        <span key={cc} className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                                                            {cc}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                                                <div className="flex justify-between text-xs font-mono">
+                                                    <span className="text-slate-400 font-sans font-medium">Planned:</span>
+                                                    <span className="font-bold text-slate-700">{formatCurrency(item.planned)}</span>
+                                                </div>
+                                                <div className="flex justify-between text-xs font-mono">
+                                                    <span className="text-slate-400 font-sans font-medium">Actual:</span>
+                                                    <span className="font-bold text-slate-700">{formatCurrency(item.actual)}</span>
+                                                </div>
+                                                <div className="flex justify-between text-xs font-mono">
+                                                    <span className="text-slate-400 font-sans font-medium">Variance:</span>
+                                                    <span className={`font-bold ${isOverrun ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                        {item.variance >= 0 ? '+' : '−'}{formatCurrency(Math.abs(item.variance))}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-1 pt-1">
+                                                <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                                    <span>Share of Portfolio</span>
+                                                    <span>{sharePct.toFixed(1)}%</span>
+                                                </div>
+                                                <div className="h-1.5 bg-slate-200/60 rounded-full overflow-hidden">
+                                                    <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${Math.min(sharePct, 100)}%` }} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    )}
+
                     {/* Plan vs Actual Variance */}
                     <section className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm" aria-labelledby="budget-chart-heading">
                         <div className="mb-6">
@@ -371,11 +547,45 @@ export default function Budget() {
                         <span>{t('budget.syncInfo')}</span>
                     </div>
 
-                    {/* CATEGORIES TABLE */}
+                    {/* CATEGORIES TABLE & FILTERS */}
                     <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-                        <div className="p-6 border-b border-slate-50">
-                            <h3 className="font-bold text-slate-700">{t('budget.categories')}</h3>
-                            <p className="text-xs text-slate-400 mt-0.5">{t('budget.groupedBy')}</p>
+                        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                <h3 className="font-bold text-slate-700">{t('budget.categories')}</h3>
+                                <p className="text-xs text-slate-400 mt-0.5">{t('budget.groupedBy')}</p>
+                            </div>
+                            
+                            {categories.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-3">
+                                    {/* Owner Filter */}
+                                    <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+                                        <Filter className="w-3.5 h-3.5 text-slate-400" />
+                                        <span className="font-semibold text-slate-500">Owner:</span>
+                                        <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}
+                                            className="bg-transparent font-bold text-slate-700 outline-none cursor-pointer">
+                                            <option value="ALL">{t('budget.allOwners')}</option>
+                                            {responsibilityData.allOwners.map(o => (
+                                                <option key={o} value={o}>{o}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {/* Cost Center Filter */}
+                                    {responsibilityData.allCostCenters.length > 0 && (
+                                        <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+                                            <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                                            <span className="font-semibold text-slate-500">Cost Center:</span>
+                                            <select value={costCenterFilter} onChange={e => setCostCenterFilter(e.target.value)}
+                                                className="bg-transparent font-bold text-slate-700 outline-none cursor-pointer">
+                                                <option value="ALL">All Cost Centers</option>
+                                                {responsibilityData.allCostCenters.map(cc => (
+                                                    <option key={cc} value={cc}>{cc}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {loadingCats ? (
@@ -395,12 +605,18 @@ export default function Budget() {
                                     )}
                                 </div>
                             </div>
+                        ) : filteredCategories.length === 0 ? (
+                            <div className="px-6 py-12 text-center text-slate-400 text-sm">
+                                No budget categories match the selected owner or cost center filters.
+                            </div>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full text-left border-collapse">
                                     <thead>
                                         <tr className="bg-slate-50/80 text-xs uppercase tracking-wider text-slate-500 font-bold">
                                             <th className="px-6 py-4">{t('common.name')}</th>
+                                            <th className="px-6 py-4">{t('budget.responsiblePerson')}</th>
+                                            <th className="px-6 py-4">{t('budget.costCenter')}</th>
                                             <th className="px-6 py-4">{t('budget.planned')} (IDR)</th>
                                             <th className="px-6 py-4">{t('budget.actual')} (IDR)</th>
                                             <th className="px-6 py-4">{t('budget.variance')} (IDR)</th>
@@ -412,20 +628,20 @@ export default function Budget() {
                                     <tbody className="text-sm font-medium text-slate-600 divide-y divide-slate-50">
                                         {capexRows.length > 0 && (
                                             <>
-                                                <tr><td colSpan={canEdit ? 7 : 6} className="px-6 py-2 bg-slate-50/60 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700">{t('budget.capex')}</td></tr>
+                                                <tr><td colSpan={canEdit ? 9 : 8} className="px-6 py-2 bg-slate-50/60 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700">{t('budget.capex')}</td></tr>
                                                 {capexRows.map(renderRow)}
                                             </>
                                         )}
                                         {opexRows.length > 0 && (
                                             <>
-                                                <tr><td colSpan={canEdit ? 7 : 6} className="px-6 py-2 bg-slate-50/60 text-[10px] font-black uppercase tracking-[0.2em] text-blue-700">{t('budget.opex')}</td></tr>
+                                                <tr><td colSpan={canEdit ? 9 : 8} className="px-6 py-2 bg-slate-50/60 text-[10px] font-black uppercase tracking-[0.2em] text-blue-700">{t('budget.opex')}</td></tr>
                                                 {opexRows.map(renderRow)}
                                             </>
                                         )}
                                     </tbody>
                                     <tfoot>
                                         <tr className="bg-slate-50/80 text-sm font-bold text-slate-700 border-t-2 border-slate-200">
-                                            <td className="px-6 py-4">{t('common.total')}</td>
+                                            <td className="px-6 py-4" colSpan={3}>{t('common.total')}</td>
                                             <td className="px-6 py-4 font-mono">{formatCurrency(totalPlanned)}</td>
                                             <td className="px-6 py-4 font-mono">{formatCurrency(totalActual)}</td>
                                             <td className={`px-6 py-4 font-mono ${totalVariance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -446,7 +662,7 @@ export default function Budget() {
             {/* ADD/EDIT MODAL */}
             {isModalOpen && (
                 <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setIsModalOpen(false)}>
-                    <div role="dialog" className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                    <div role="dialog" className="bg-white rounded-3xl p-8 w-full max-w-lg shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-6">
                             <div className="flex items-center gap-3">
                                 <div className={`p-2.5 rounded-xl ${editingRow ? 'bg-blue-50 text-blue-600' : 'bg-emerald-50 text-emerald-600'}`}>
@@ -469,6 +685,32 @@ export default function Budget() {
                                 <input type="text" required value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}
                                     placeholder="e.g. Site Preparation"
                                     className="w-full px-4 py-3 bg-white/50 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all text-slate-700 text-sm" />
+                            </div>
+
+                            {/* RESPONSIBLE OWNER & COST CENTER */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1 flex items-center gap-1">
+                                        <User className="w-3 h-3" /> {t('budget.responsiblePerson')}
+                                    </label>
+                                    <input type="text" list="system-users-list" value={form.responsible_person} onChange={e => setForm({ ...form, responsible_person: e.target.value })}
+                                        placeholder="e.g. John Doe / Project Manager"
+                                        className="w-full px-4 py-3 bg-white/50 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all text-slate-700 text-sm" />
+                                    <datalist id="system-users-list">
+                                        {systemUsers.map(u => (
+                                            <option key={u.id || u.username} value={u.full_name || u.username} />
+                                        ))}
+                                    </datalist>
+                                </div>
+
+                                <div className="space-y-1">
+                                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1 flex items-center gap-1">
+                                        <Building2 className="w-3 h-3" /> {t('budget.costCenter')}
+                                    </label>
+                                    <input type="text" value={form.cost_center} onChange={e => setForm({ ...form, cost_center: e.target.value })}
+                                        placeholder="e.g. CC-101 / CIVIL"
+                                        className="w-full px-4 py-3 bg-white/50 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all text-slate-700 text-sm" />
+                                </div>
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">

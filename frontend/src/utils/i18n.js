@@ -519,6 +519,15 @@ export const translations = {
         'settings.users.deletedSuccess': 'permanently deleted.',
         'settings.users.deactivatedSuccess': 'deactivated.',
         'settings.users.activatedSuccess': 'activated.',
+
+        // ── Budget Responsibility ──────────────────────────────────────────────
+        'budget.responsiblePerson':      'Responsible Owner',
+        'budget.costCenter':             'Cost Center',
+        'budget.responsibilityBreakdown': 'Responsibility Breakdown & Allocation',
+        'budget.allOwners':              'All Owners',
+        'budget.unassignedOwner':        'Unassigned Owner',
+        'budget.filterOwner':            'Filter by Owner',
+        'budget.filterCostCenter':       'Filter Cost Center',
     },
 
     id: {
@@ -536,6 +545,13 @@ export const translations = {
         'budget.addedSuccess':      'berhasil ditambahkan.',
         'budget.updatedSuccess':    'berhasil diperbarui.',
         'budget.deletedSuccess':    'Kategori dihapus.',
+        'budget.responsiblePerson':      'Penanggung Jawab',
+        'budget.costCenter':             'Pusat Biaya',
+        'budget.responsibilityBreakdown': 'Rincian Tanggung Jawab Anggaran',
+        'budget.allOwners':              'Semua Penanggung Jawab',
+        'budget.unassignedOwner':        'Tanpa Penanggung Jawab',
+        'budget.filterOwner':            'Filter Penanggung Jawab',
+        'budget.filterCostCenter':       'Filter Pusat Biaya',
         
         'tools.editTool':           'Ubah Alat',
         'tools.deleteTool':         'Hapus Alat',

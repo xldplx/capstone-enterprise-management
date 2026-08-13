@@ -50,7 +50,7 @@ const getBudgetByProject = async (req, res) => {
 
 // ── POST /api/budget ──────────────────────────────────────────────────────────
 const createBudgetCategory = async (req, res) => {
-    const { category, type, planned, actual, project_id, wbs_id } = req.body;
+    const { category, type, planned, actual, project_id, wbs_id, responsible_person, cost_center } = req.body;
 
     if (!category || !String(category).trim())
         return res.status(400).json({ success: false, message: 'category is required.' });
@@ -67,12 +67,14 @@ const createBudgetCategory = async (req, res) => {
         const { data, error } = await supabase
             .from('budget')
             .insert([{
-                category:   String(category).trim(),
+                category:           String(category).trim(),
                 type,
-                planned:    plannedNum,
-                actual:     actual != null ? parseFloat(actual) : 0,
-                project_id: parseInt(project_id),
-                wbs_id:     wbs_id ? parseInt(wbs_id) : null,
+                planned:            plannedNum,
+                actual:             actual != null ? parseFloat(actual) : 0,
+                project_id:         parseInt(project_id),
+                wbs_id:             wbs_id ? parseInt(wbs_id) : null,
+                responsible_person: responsible_person ? String(responsible_person).trim() : null,
+                cost_center:        cost_center ? String(cost_center).trim() : null,
             }])
             .select('*, wbs(id, wbs_code, name)')
             .single();
@@ -80,7 +82,7 @@ const createBudgetCategory = async (req, res) => {
         if (error) return res.status(500).json({ success: false, message: error.message });
 
         await writeAudit(req, 'CREATE', 'budget', data.id, {
-            category: data.category, type, project_id,
+            category: data.category, type, project_id, responsible_person: data.responsible_person, cost_center: data.cost_center,
         });
         res.status(201).json({ success: true, data });
     } catch (e) {
@@ -91,18 +93,19 @@ const createBudgetCategory = async (req, res) => {
 // ── PUT /api/budget/:id ───────────────────────────────────────────────────────
 const updateBudgetCategory = async (req, res) => {
     const { id } = req.params;
-    const { category, type, planned, actual, wbs_id } = req.body;
+    const { category, type, planned, actual, wbs_id, responsible_person, cost_center } = req.body;
 
     if (!category || !String(category).trim())
         return res.status(400).json({ success: false, message: 'category is required.' });
 
     try {
         const updates = {
-            category:   String(category).trim(),
-            type:       ['CAPEX', 'OPEX'].includes(type) ? type : 'CAPEX',
-            updated_at: new Date().toISOString(),
-            // wbs_id boleh null (hapus link)
-            wbs_id:     wbs_id ? parseInt(wbs_id) : null,
+            category:           String(category).trim(),
+            type:               ['CAPEX', 'OPEX'].includes(type) ? type : 'CAPEX',
+            updated_at:         new Date().toISOString(),
+            wbs_id:             wbs_id ? parseInt(wbs_id) : null,
+            responsible_person: responsible_person != null ? (String(responsible_person).trim() || null) : null,
+            cost_center:        cost_center != null ? (String(cost_center).trim() || null) : null,
         };
 
         if (planned != null) updates.planned = parseFloat(planned);
@@ -118,7 +121,7 @@ const updateBudgetCategory = async (req, res) => {
         if (error) return res.status(500).json({ success: false, message: error.message });
         if (!data)  return res.status(404).json({ success: false, message: 'Budget category not found.' });
 
-        await writeAudit(req, 'UPDATE', 'budget', id, { category: data.category });
+        await writeAudit(req, 'UPDATE', 'budget', id, { category: data.category, responsible_person: data.responsible_person });
         res.json({ success: true, data });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
