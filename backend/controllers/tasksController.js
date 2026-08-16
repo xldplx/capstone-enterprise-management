@@ -12,6 +12,7 @@ const supabase = require('../config/db');
 const { writeAudit } = require('./auditController');
 const { evaluatePlanReadiness, parseUtcDay } = require('../services/planningReadinessService');
 const { requirePlanningUnlocked } = require('../services/planningLockService');
+const agileService = require('../services/agileService');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function computeSchedulePct(plannedStart, plannedEnd, today) {
@@ -150,6 +151,99 @@ const updateTask = async (req, res) => {
 
         const [enriched] = enrichTasks([data]);
         res.json({ success: true, data: enriched });
+    } catch (e) {
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
+    }
+};
+
+// ── PATCH /api/tasks/:id/agile ────────────────────────────────────────────────
+// Board moves, sprint commitment, estimation and assignment.
+//
+// Deliberately NOT behind requirePlanningUnlocked. The baseline freezes the PLAN
+// — dates, cost, hours, weight — and none of those are touched here. Committing
+// a story to a sprint or moving a card is a delivery decision that has to keep
+// working after the plan is frozen, which is exactly when execution happens.
+const updateTaskAgile = async (req, res) => {
+    try {
+        const { data: existing, error: findError } = await supabase
+            .from('tasks')
+            .select('id, project_id, sprint_id, board_status, pct_complete, blocked_reason, completed_at')
+            .eq('id', req.params.id)
+            .maybeSingle();
+        if (findError) return res.status(500).json({ success: false, message: findError.message });
+        if (!existing) return res.status(404).json({ success: false, message: 'Task not found.' });
+
+        // A story can only join a sprint on its own project.
+        if (req.body.sprint_id) {
+            const { data: sprint, error: sprintError } = await supabase
+                .from('sprints').select('id, project_id')
+                .eq('id', req.body.sprint_id).maybeSingle();
+            if (sprintError) return res.status(500).json({ success: false, message: sprintError.message });
+            if (!sprint || sprint.project_id !== existing.project_id) {
+                return res.status(400).json({
+                    success: false,
+                    code: 'SPRINT_PROJECT_MISMATCH',
+                    message: 'That sprint belongs to a different project.',
+                });
+            }
+        }
+
+        const updates = agileService.reconcileAgileUpdate(existing, req.body);
+        updates.updated_at = new Date().toISOString();
+
+        const { data, error } = await supabase
+            .from('tasks').update(updates).eq('id', req.params.id).select().single();
+        if (error) return res.status(500).json({ success: false, message: error.message });
+
+        await writeAudit(req, 'UPDATE', 'task_agile', req.params.id, {
+            board_status: updates.board_status,
+            sprint_id:    updates.sprint_id,
+            story_points: updates.story_points,
+        });
+
+        const [enriched] = enrichTasks([data]);
+        res.json({ success: true, data: enriched });
+    } catch (e) {
+        res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
+    }
+};
+
+// ── POST /api/projects/:projectId/sprints/:sprintId/commit ────────────────────
+// Sprint planning: pull a set of stories from the product backlog into a sprint
+// in one action, rather than one request per card.
+const commitTasksToSprint = async (req, res) => {
+    const { projectId, sprintId } = req.params;
+    const { task_ids } = req.body;
+
+    if (!Array.isArray(task_ids) || task_ids.length === 0)
+        return res.status(400).json({ success: false, message: 'task_ids array is required.' });
+
+    try {
+        const { data: sprint, error: sprintError } = await supabase
+            .from('sprints').select('id, project_id, status').eq('id', sprintId).maybeSingle();
+        if (sprintError) return res.status(500).json({ success: false, message: sprintError.message });
+        if (!sprint || sprint.project_id !== parseInt(projectId))
+            return res.status(404).json({ success: false, message: 'Sprint not found on this project.' });
+        if (['completed', 'cancelled'].includes(sprint.status))
+            return res.status(409).json({ success: false, code: 'SPRINT_CLOSED', message: `Cannot commit stories to a ${sprint.status} sprint.` });
+
+        // Scope the update by project_id too, so a task id from another project
+        // cannot be pulled in by a crafted request.
+        const { data, error } = await supabase.from('tasks')
+            .update({
+                sprint_id:    parseInt(sprintId),
+                board_status: 'todo',
+                updated_at:   new Date().toISOString(),
+            })
+            .in('id', task_ids)
+            .eq('project_id', parseInt(projectId))
+            .neq('board_status', 'done')
+            .select('id');
+        if (error) return res.status(500).json({ success: false, message: error.message });
+
+        const committed = (data || []).length;
+        await writeAudit(req, 'UPDATE', 'sprint_scope', sprintId, { committed, task_ids });
+        res.json({ success: true, committed });
     } catch (e) {
         res.status(e.statusCode || 500).json({ success: false, code: e.code, message: e.message });
     }
@@ -352,6 +446,8 @@ module.exports = {
     getTasksByProject,
     createTask,
     updateTask,
+    updateTaskAgile,
+    commitTasksToSprint,
     deleteTask,
     bulkImportTasks,
     lockBaseline,

@@ -1,37 +1,36 @@
 /**
- * agileService.js — derives the Agile view from data the database already holds.
+ * agileService.js — sprint, board and delivery-metric logic.
  *
- * Correction #3 asks for Agile methodology without changing the Supabase schema,
- * so nothing here is stored: sprints, board columns, story points, burndown and
- * velocity are all computed from `tasks`, `daily_actuals` and `personnel`.
+ * Correction #3 implements Agile as a HYBRID over the existing plan rather than
+ * beside it. Sprints are real rows in `sprints`; membership, board state, points,
+ * assignee and completion are real columns on `tasks`. That means one task row is
+ * simultaneously a CPM activity (WBS code, predecessors, planned dates, float)
+ * and a board card — so EVM, the critical path and the baseline lock keep working
+ * untouched, and the board is a second view over the same rows.
  *
- * Where each agile concept comes from:
- *   sprint          — projects.planned_start/planned_end tiled at a cadence
- *   sprint scope    — tasks whose planned window overlaps the sprint window
- *   board column    — tasks.pct_complete + whether planned_end has passed
- *   story points    — tasks.weight, which is already relative sizing summing to 1
- *   burndown        — daily_actuals, which records pct_complete per task per day
- *   capacity        — active personnel on the project x working days x 8h
+ * Two axes over one row:
+ *   WBS    answers "what"          — scope decomposition
+ *   sprint answers "when we commit" — a time-boxed delivery commitment
  *
- * Every function is pure so the whole module is testable with `node --test`
- * while the real schema lives in Supabase and cannot be exercised locally.
+ * Everything here is a pure function over plain objects, so the whole module is
+ * testable with `node --test` while the schema lives in Supabase.
  */
 
 const { parseUtcDay } = require('./planningReadinessService');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const DEFAULT_CADENCE_DAYS = 14;
 const HOURS_PER_PERSON_DAY = 8;
 
-// Board columns, in render order. 'at_risk' replaces the usual "Review" lane:
-// nothing in the schema distinguishes review from in-progress, whereas an
-// overdue-and-unfinished task is a real signal this codebase already computes.
-const BOARD_COLUMNS = ['todo', 'in_progress', 'at_risk', 'done'];
+// Every value board_status may hold. 'backlog' is the product backlog pool, not
+// a board column — the board shows work already committed to a sprint.
+const TASK_BOARD_STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'done', 'blocked'];
+const BOARD_COLUMNS       = ['todo', 'in_progress', 'review', 'blocked', 'done'];
+const SPRINT_STATUSES     = ['planning', 'active', 'completed', 'cancelled'];
 
 // Story points are relative sizing, and so is `weight`. A weight of 0.05 is 5%
-// of the project, which maps straight onto the Fibonacci scale as 5 points —
-// so a fully weighted project totals roughly 100 points.
+// of the project, which maps onto the Fibonacci scale as 5 points. Used only to
+// SUGGEST an estimate for an unsized story — once set, story_points is owned
+// independently, which matters because weight is frozen by the baseline lock.
 const FIBONACCI = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
 
 const num = (value) => parseFloat(value) || 0;
@@ -44,89 +43,30 @@ function formatUtcDay(ms) {
     return new Date(ms).toISOString().slice(0, 10);
 }
 
+function badRequest(message, code) {
+    const error = new Error(message);
+    error.statusCode = 400;
+    error.code = code;
+    return error;
+}
+
 /**
  * "Today" as a UTC-day timestamp, read in Asia/Jakarta the same way
- * tasksController and projectsController do it. Sharing the convention keeps
- * the board, the float column and EVM from disagreeing about what day it is.
+ * tasksController and projectsController do. Sharing the convention keeps the
+ * board, the float column and EVM from disagreeing about what day it is.
  */
 function utcToday(now = new Date()) {
     const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
         timeZone: 'Asia/Jakarta',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
+        year: 'numeric', month: '2-digit', day: '2-digit',
     }).formatToParts(now).map(part => [part.type, part.value]));
     return parseUtcDay(`${parts.year}-${parts.month}-${parts.day}`);
 }
 
-// ── Sprints ──────────────────────────────────────────────────────────────────
+// ── Estimation ───────────────────────────────────────────────────────────────
 
-/**
- * Tile fixed-length sprints across the project window.
- *
- * The tiling is deterministic — same project dates and same cadence give every
- * user the same sprints — which is what lets sprints exist at all without a
- * table to store them in. The final sprint is truncated at the project end
- * rather than overrunning it, so a 30-day project at a 14-day cadence gives
- * 14 + 14 + 2 days, not 14 + 14 + 14.
- */
-function tileSprints(project = {}, cadenceDays = DEFAULT_CADENCE_DAYS, today = utcToday()) {
-    const start = parseUtcDay(project.planned_start);
-    const end   = parseUtcDay(project.planned_end);
-    if (start == null || end == null || end < start) return [];
-
-    const cadence = Number.isFinite(cadenceDays) && cadenceDays >= 1
-        ? Math.floor(cadenceDays)
-        : DEFAULT_CADENCE_DAYS;
-
-    const sprints = [];
-    let cursor = start;
-    let number = 1;
-
-    // Guard against a pathological project span producing an unbounded list.
-    while (cursor <= end && number <= 500) {
-        const sprintEnd = Math.min(cursor + (cadence - 1) * DAY_MS, end);
-        sprints.push({
-            number,
-            name:       `Sprint ${number}`,
-            start_date: formatUtcDay(cursor),
-            end_date:   formatUtcDay(sprintEnd),
-            days:       Math.round((sprintEnd - cursor) / DAY_MS) + 1,
-            state:      today > sprintEnd ? 'completed' : (today >= cursor ? 'active' : 'planned'),
-        });
-        cursor = sprintEnd + DAY_MS;
-        number += 1;
-    }
-
-    return sprints;
-}
-
-/**
- * A task belongs to a sprint when its planned window overlaps the sprint
- * window. Overlap, not containment: a task spanning three sprints is genuinely
- * worked on in all three, and hiding it from two of them would misreport the
- * board. Undated tasks belong to no sprint — they are the product backlog.
- */
-function tasksInSprint(tasks = [], sprint = {}) {
-    const sprintStart = parseUtcDay(sprint.start_date);
-    const sprintEnd   = parseUtcDay(sprint.end_date);
-    if (sprintStart == null || sprintEnd == null) return [];
-
-    return tasks.filter(task => {
-        const taskStart = parseUtcDay(task.planned_start);
-        const taskEnd   = parseUtcDay(task.planned_end);
-        if (taskStart == null && taskEnd == null) return false;
-        // A task dated on one end only is placed by the date it has.
-        const from = taskStart ?? taskEnd;
-        const to   = taskEnd   ?? taskStart;
-        return from <= sprintEnd && sprintStart <= to;
-    });
-}
-
-// ── Cards ────────────────────────────────────────────────────────────────────
-
-/** Story points for a task, or null when it carries no weight (unestimated). */
-function storyPoints(task = {}) {
+/** Suggested points for an unsized story, from its planning weight. */
+function suggestStoryPoints(task = {}) {
     const weight = num(task.weight);
     if (weight <= 0) return null;
     const raw = weight * 100;
@@ -134,11 +74,158 @@ function storyPoints(task = {}) {
         Math.abs(candidate - raw) < Math.abs(best - raw) ? candidate : best);
 }
 
+function pointsOf(task = {}) {
+    const stored = task.story_points;
+    if (stored === null || stored === undefined || stored === '') return null;
+    const parsed = parseFloat(stored);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+// ── Sprint payload validation ────────────────────────────────────────────────
+
+function normalizeSprintPayload(body = {}, { partial = false } = {}) {
+    const out = {};
+    const has = field => body[field] !== undefined;
+    const required = field => !partial || has(field);
+
+    if (required('name')) {
+        const name = String(body.name ?? '').trim();
+        if (!name) throw badRequest('Sprint name is required.', 'SPRINT_NAME_REQUIRED');
+        out.name = name;
+    }
+
+    if (required('start_date') || required('end_date') || has('start_date') || has('end_date')) {
+        const start = parseUtcDay(body.start_date);
+        const end   = parseUtcDay(body.end_date);
+        if (start == null || end == null)
+            throw badRequest('Sprint start and end dates are required, as YYYY-MM-DD.', 'SPRINT_DATES_REQUIRED');
+        if (end < start)
+            throw badRequest('A sprint cannot end before it starts.', 'SPRINT_DATES_INVALID');
+        out.start_date = formatUtcDay(start);
+        out.end_date   = formatUtcDay(end);
+    }
+
+    if (has('goal')) out.goal = String(body.goal ?? '').trim() || null;
+
+    if (has('status')) {
+        if (!SPRINT_STATUSES.includes(body.status))
+            throw badRequest(`Sprint status must be one of: ${SPRINT_STATUSES.join(', ')}.`, 'SPRINT_STATUS_INVALID');
+        out.status = body.status;
+    }
+
+    return out;
+}
+
+/**
+ * Sprint windows within a project must not overlap — two sprints running over
+ * the same days makes velocity and burndown meaningless. `others` is every
+ * OTHER sprint of the project (exclude the one being edited).
+ */
+function findOverlappingSprint(candidate, others = []) {
+    const start = parseUtcDay(candidate.start_date);
+    const end   = parseUtcDay(candidate.end_date);
+    if (start == null || end == null) return null;
+
+    return others.find(other => {
+        if (other.status === 'cancelled') return false;
+        const otherStart = parseUtcDay(other.start_date);
+        const otherEnd   = parseUtcDay(other.end_date);
+        if (otherStart == null || otherEnd == null) return false;
+        return start <= otherEnd && otherStart <= end;
+    }) || null;
+}
+
+// ── Board writes ─────────────────────────────────────────────────────────────
+
+/**
+ * Build the database patch for an agile update on a task.
+ *
+ * These fields are DELIVERY decisions, not planning ones, so callers must not
+ * put them through requirePlanningUnlocked — a frozen baseline should stop the
+ * dates moving, not stop the team working the board.
+ *
+ * Reconciliation, so the board and EVM can never contradict each other:
+ *   board_status -> done  : pct_complete becomes 100, completed_at stamped
+ *   pct_complete -> 100   : board_status becomes done, completed_at stamped
+ *   done -> anything else : completed_at cleared
+ *
+ * Reopening deliberately does NOT rewrite pct_complete. The board has no idea
+ * how much of a reopened task is really finished, and inventing a number would
+ * corrupt earned value; the real figure is entered on Daily Actuals.
+ */
+function reconcileAgileUpdate(existing = {}, patch = {}, now = new Date().toISOString()) {
+    const updates = {};
+
+    if (patch.board_status !== undefined) {
+        if (!TASK_BOARD_STATUSES.includes(patch.board_status))
+            throw badRequest(`Board status must be one of: ${TASK_BOARD_STATUSES.join(', ')}.`, 'BOARD_STATUS_INVALID');
+        updates.board_status = patch.board_status;
+    }
+
+    if (patch.story_points !== undefined) {
+        const value = patch.story_points === null || patch.story_points === '' ? null : Number(patch.story_points);
+        if (value !== null && (!Number.isFinite(value) || value < 0))
+            throw badRequest('Story points must be zero or more.', 'STORY_POINTS_INVALID');
+        updates.story_points = value;
+    }
+
+    if (patch.sprint_id !== undefined)
+        updates.sprint_id = patch.sprint_id === null || patch.sprint_id === '' ? null : Number(patch.sprint_id);
+
+    if (patch.assignee_id !== undefined)
+        updates.assignee_id = patch.assignee_id === null || patch.assignee_id === '' ? null : Number(patch.assignee_id);
+
+    if (patch.blocked_reason !== undefined)
+        updates.blocked_reason = String(patch.blocked_reason ?? '').trim() || null;
+
+    if (patch.pct_complete !== undefined) {
+        const value = Number(patch.pct_complete);
+        if (!Number.isFinite(value) || value < 0 || value > 100)
+            throw badRequest('Percent complete must be between 0 and 100.', 'PCT_COMPLETE_INVALID');
+        updates.pct_complete = value;
+    }
+
+    const nextStatus = updates.board_status ?? existing.board_status;
+    const nextReason = updates.blocked_reason !== undefined ? updates.blocked_reason : existing.blocked_reason;
+
+    // A card cannot sit in 'blocked' without saying why — that is the entire
+    // value of the column at a stand-up.
+    if (nextStatus === 'blocked' && !nextReason)
+        throw badRequest('A blocked story needs a reason.', 'BLOCKED_REASON_REQUIRED');
+
+    // Leaving 'blocked' clears the stale reason so it cannot resurface later.
+    if (existing.board_status === 'blocked' && nextStatus !== 'blocked' && updates.blocked_reason === undefined)
+        updates.blocked_reason = null;
+
+    // A story cannot be committed to the board without being in a sprint, and a
+    // story pulled out of a sprint returns to the product backlog.
+    const nextSprint = updates.sprint_id !== undefined ? updates.sprint_id : existing.sprint_id;
+    if (nextSprint == null && nextStatus !== 'backlog' && updates.board_status === undefined)
+        updates.board_status = 'backlog';
+    if (nextSprint != null && nextStatus === 'backlog' && updates.board_status === undefined)
+        updates.board_status = 'todo';
+
+    const wasDone = existing.board_status === 'done';
+    const pctNow  = updates.pct_complete ?? num(existing.pct_complete);
+    const isDone  = (updates.board_status ?? nextStatus) === 'done' || pctNow >= 100;
+
+    if (isDone) {
+        updates.board_status = 'done';
+        if (updates.pct_complete === undefined && pctNow < 100) updates.pct_complete = 100;
+        // Keep the original completion date on a no-op re-save of a done story.
+        if (!wasDone || !existing.completed_at) updates.completed_at = now;
+    } else if (wasDone) {
+        updates.completed_at = null;
+    }
+
+    return updates;
+}
+
+// ── Cards ────────────────────────────────────────────────────────────────────
+
 /**
  * Days remaining until planned_end. Negative means overdue — the raw sign is
- * what the board needs, so unlike tasksController.computeFloat this is not
- * clamped at zero. `float` in the card payload keeps the clamped convention the
- * rest of the app uses.
+ * what the card needs, so unlike tasksController.computeFloat it is not clamped.
  */
 function daysToPlannedEnd(task = {}, today = utcToday()) {
     const end = parseUtcDay(task.planned_end);
@@ -147,37 +234,37 @@ function daysToPlannedEnd(task = {}, today = utcToday()) {
 }
 
 /**
- * Which board column a task sits in.
+ * Shape a task row into the card the board renders.
  *
- * Derived, never stored — which is exactly why the board can never contradict
- * EVM: both read pct_complete. 'at_risk' takes precedence over 'in_progress'
- * because an overdue task needs attention regardless of how far along it is.
+ * `at_risk` is a decoration, not a column: it comes from the CPM schedule, so
+ * nobody chooses it and dragging cannot clear it. Keeping it visible is what
+ * ties the board back to the critical path the rest of the app computes.
  */
-function classifyTask(task = {}, today = utcToday()) {
-    if (num(task.pct_complete) >= 100) return 'done';
+function toCard(task = {}, { personnelById = new Map(), today = utcToday() } = {}) {
     const remaining = daysToPlannedEnd(task, today);
-    if (remaining !== null && remaining < 0) return 'at_risk';
-    return num(task.pct_complete) > 0 ? 'in_progress' : 'todo';
-}
+    const assignee  = task.assignee_id != null ? personnelById.get(task.assignee_id) : null;
+    const status    = TASK_BOARD_STATUSES.includes(task.board_status) ? task.board_status : 'backlog';
 
-/** Shape a task row into the card the board renders. */
-function toCard(task = {}, today = utcToday()) {
-    const remaining = daysToPlannedEnd(task, today);
-    const pct = num(task.pct_complete);
     return {
-        id:            task.id,
-        task_name:     task.task_name,
-        wbs_code:      task.wbs_code,
-        column:        classifyTask(task, today),
-        pct_complete:  pct,
-        story_points:  storyPoints(task),
-        planned_hours: num(task.planned_hours),
-        actual_hours:  num(task.actual_hours),
-        planned_cost:  num(task.planned_cost),
-        planned_start: task.planned_start,
-        planned_end:   task.planned_end,
-        float:         remaining === null ? null : Math.max(0, remaining),
-        days_overdue:  remaining !== null && remaining < 0 ? Math.abs(remaining) : 0,
+        id:             task.id,
+        task_name:      task.task_name,
+        wbs_code:       task.wbs_code,
+        wbs_id:         task.wbs_id,
+        sprint_id:      task.sprint_id ?? null,
+        board_status:   status,
+        pct_complete:   num(task.pct_complete),
+        story_points:   pointsOf(task),
+        suggested_points: pointsOf(task) === null ? suggestStoryPoints(task) : null,
+        assignee_id:    task.assignee_id ?? null,
+        assignee_name:  assignee ? assignee.full_name : null,
+        blocked_reason: task.blocked_reason ?? null,
+        planned_hours:  num(task.planned_hours),
+        actual_hours:   num(task.actual_hours),
+        planned_start:  task.planned_start,
+        planned_end:    task.planned_end,
+        completed_at:   task.completed_at ?? null,
+        float:          remaining === null ? null : Math.max(0, remaining),
+        days_overdue:   remaining !== null && remaining < 0 && status !== 'done' ? Math.abs(remaining) : 0,
     };
 }
 
@@ -187,13 +274,11 @@ function toCard(task = {}, today = utcToday()) {
  * Index `daily_actuals` into task_id -> sorted [{ day, pct }].
  *
  * submitDailyActuals stores pct_complete as the cumulative figure reported that
- * day and rolls the task forward with max(), so reading progress back as a
- * running maximum matches how it was written. Rows arrive newest-first from the
- * API and are sorted here rather than relying on the caller's ordering.
+ * day and rolls the task forward with max(), so reading it back as a running
+ * maximum matches how it was written.
  */
 function indexProgressLedger(dailyActuals = []) {
     const byTask = new Map();
-
     for (const row of dailyActuals) {
         const day = parseUtcDay(row.entry_date);
         if (day == null || row.task_id == null) continue;
@@ -201,7 +286,6 @@ function indexProgressLedger(dailyActuals = []) {
         list.push({ day, pct: num(row.pct_complete) });
         byTask.set(row.task_id, list);
     }
-
     for (const list of byTask.values()) list.sort((a, b) => a.day - b.day);
     return byTask;
 }
@@ -218,20 +302,28 @@ function pctOnDay(ledger, taskId, day) {
     return best;
 }
 
-// ── Sprint metrics, burndown, velocity ───────────────────────────────────────
+/**
+ * Fraction of a story delivered as at `day`, in the range 0..1.
+ * completed_at is exact, so it wins outright; anything unfinished falls back to
+ * the partial progress recorded in the ledger.
+ */
+function progressOnDay(task, ledger, day) {
+    const completed = parseUtcDay(task.completed_at ? String(task.completed_at).slice(0, 10) : null);
+    if (completed != null && completed <= day) return 1;
+    return Math.min(100, pctOnDay(ledger, task.id, day)) / 100;
+}
+
+// ── Sprint metrics ───────────────────────────────────────────────────────────
 
 function computeSprintMetrics(sprintTasks = [], today = utcToday()) {
-    const cards = sprintTasks.map(task => toCard(task, today));
-
-    const counts = Object.fromEntries(BOARD_COLUMNS.map(column => [column, 0]));
-    cards.forEach(card => { counts[card.column] += 1; });
+    const cards  = sprintTasks.map(task => toCard(task, { today }));
+    const counts = Object.fromEntries(TASK_BOARD_STATUSES.map(status => [status, 0]));
+    cards.forEach(card => { counts[card.board_status] += 1; });
 
     const committedPoints = cards.reduce((sum, card) => sum + (card.story_points ?? 0), 0);
     const completedPoints = cards
-        .filter(card => card.column === 'done')
+        .filter(card => card.board_status === 'done')
         .reduce((sum, card) => sum + (card.story_points ?? 0), 0);
-
-    const plannedHours = cards.reduce((sum, card) => sum + card.planned_hours, 0);
 
     return {
         task_count:        cards.length,
@@ -239,9 +331,11 @@ function computeSprintMetrics(sprintTasks = [], today = utcToday()) {
         committed_points:  round2(committedPoints),
         completed_points:  round2(completedPoints),
         remaining_points:  round2(committedPoints - completedPoints),
-        planned_hours:     round2(plannedHours),
+        planned_hours:     round2(cards.reduce((sum, card) => sum + card.planned_hours, 0)),
         actual_hours:      round2(cards.reduce((sum, card) => sum + card.actual_hours, 0)),
         unestimated_tasks: cards.filter(card => card.story_points === null).length,
+        blocked_tasks:     counts.blocked,
+        overdue_tasks:     cards.filter(card => card.days_overdue > 0).length,
         completion_pct:    committedPoints > 0
             ? round2((completedPoints / committedPoints) * 100)
             : (cards.length > 0 ? round2((counts.done / cards.length) * 100) : 0),
@@ -251,28 +345,16 @@ function computeSprintMetrics(sprintTasks = [], today = utcToday()) {
 /**
  * Daily burndown for one sprint, in story points.
  *
- * Ideal is a straight line from the committed total to zero. Actual is
- * reconstructed from the daily_actuals ledger, so it is real history rather
- * than a line drawn between two points — this is the whole reason the feature
- * needs no snapshot table.
+ * Ideal is a straight line from the committed total to zero. Actual is real
+ * history: completed_at gives the exact day a story finished, and daily_actuals
+ * supplies partial progress in between — so no snapshot table is needed.
  *
- * Two deliberate details:
- *  - Days after today are null, not flat. A flat line into the future reads as
- *    "the team stalled" instead of "those days have not happened yet".
- *  - For a sprint still running, the latest plotted day is reconciled against
- *    the task's current pct_complete. Progress entered through the task endpoint
- *    rather than the daily-actuals form leaves no ledger row, and without this
- *    the chart would end on a figure the rest of the app disagrees with. A
- *    FINISHED sprint is never reconciled — crediting it with work completed
- *    after it closed would rewrite history and contradict computeVelocity,
- *    which measures each sprint strictly as at its own end date.
+ * Days after today are null rather than flat, because a flat line into the
+ * future reads as "the team stalled" instead of "those days have not happened".
  *
- * Known limitation, inherent to deriving sprint scope from task dates: the
- * committed total is computed from CURRENT sprint membership, so re-planning a
- * task's dates into or out of this sprint redraws the whole history rather than
- * showing up as a step. A tool with a stored sprint backlog would draw a
- * separate scope line here; that needs a table to record what was committed and
- * when, which this schema does not have.
+ * Known limitation: the committed total is today's sprint membership, so pulling
+ * a story in mid-sprint redraws the whole curve instead of showing a step. A
+ * separate scope line would need a log of what was committed and when.
  */
 function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today = utcToday()) {
     const start = parseUtcDay(sprint.start_date);
@@ -280,17 +362,13 @@ function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today
     if (start == null || end == null) return { days: [], committed_points: 0 };
 
     const ledger    = indexProgressLedger(dailyActuals);
-    const pointsFor = new Map(sprintTasks.map(task => [task.id, storyPoints(task) ?? 0]));
-    const committed = round2([...pointsFor.values()].reduce((sum, points) => sum + points, 0));
-
+    const committed = round2(sprintTasks.reduce((sum, task) => sum + (pointsOf(task) ?? 0), 0));
     const totalDays = Math.round((end - start) / DAY_MS) + 1;
     const step      = totalDays > 1 ? committed / (totalDays - 1) : committed;
-    // Only a sprint that is still open gets its final point reconciled.
-    const reconcileDay = today <= end ? today : null;
 
     const days = [];
     for (let index = 0; index < totalDays; index += 1) {
-        const day = start + index * DAY_MS;
+        const day   = start + index * DAY_MS;
         const ideal = round2(Math.max(0, committed - step * index));
 
         if (day > today) {
@@ -300,11 +378,9 @@ function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today
 
         let burned = 0;
         for (const task of sprintTasks) {
-            const points = pointsFor.get(task.id) ?? 0;
+            const points = pointsOf(task) ?? 0;
             if (points === 0) continue;
-            let pct = pctOnDay(ledger, task.id, day);
-            if (day === reconcileDay) pct = Math.max(pct, num(task.pct_complete));
-            burned += points * Math.min(100, pct) / 100;
+            burned += points * progressOnDay(task, ledger, day);
         }
 
         days.push({ date: formatUtcDay(day), ideal, remaining: round2(Math.max(0, committed - burned)) });
@@ -314,32 +390,34 @@ function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today
 }
 
 /**
- * Points completed in each finished sprint, plus the rolling average sprint
+ * Points delivered in each finished sprint, plus the rolling average sprint
  * planning uses to sanity-check the next commitment.
  *
- * A sprint's completed points are measured as at its own end date, from the
- * ledger — not from today's pct_complete, which would credit past sprints with
- * work finished long afterwards and flatter the velocity.
+ * A sprint is credited strictly for stories completed by its own end date, read
+ * from completed_at — crediting it with work finished afterwards would flatter
+ * the number and make forecasting useless.
  */
-function computeVelocity(sprints = [], tasks = [], dailyActuals = [], today = utcToday()) {
-    const ledger = indexProgressLedger(dailyActuals);
-
+function computeVelocity(sprints = [], tasksBySprintId = new Map(), today = utcToday()) {
     const history = sprints
-        .filter(sprint => sprint.state === 'completed')
+        .filter(sprint => sprint.status === 'completed'
+            || (parseUtcDay(sprint.end_date) != null && parseUtcDay(sprint.end_date) < today))
+        .sort((a, b) => (a.sprint_number ?? 0) - (b.sprint_number ?? 0))
         .map(sprint => {
-            const scope     = tasksInSprint(tasks, sprint);
+            const scope     = tasksBySprintId.get(sprint.id) ?? [];
             const sprintEnd = parseUtcDay(sprint.end_date);
             let committed = 0;
             let completed = 0;
 
             for (const task of scope) {
-                const points = storyPoints(task) ?? 0;
+                const points = pointsOf(task) ?? 0;
                 committed += points;
-                if (pctOnDay(ledger, task.id, sprintEnd) >= 100) completed += points;
+                const done = parseUtcDay(task.completed_at ? String(task.completed_at).slice(0, 10) : null);
+                if (done != null && sprintEnd != null && done <= sprintEnd) completed += points;
             }
 
             return {
-                sprint_number:    sprint.number,
+                sprint_id:        sprint.id,
+                sprint_number:    sprint.sprint_number,
                 name:             sprint.name,
                 committed_points: round2(committed),
                 completed_points: round2(completed),
@@ -348,7 +426,7 @@ function computeVelocity(sprints = [], tasks = [], dailyActuals = [], today = ut
 
     // Three sprints is the usual scrum window: long enough to absorb one bad
     // fortnight, short enough to still describe the team as it is now.
-    const window = history.slice(-3);
+    const window  = history.slice(-3);
     const average = window.length
         ? round2(window.reduce((sum, entry) => sum + entry.completed_points, 0) / window.length)
         : 0;
@@ -373,9 +451,9 @@ function workingDays(startDate, endDate) {
 }
 
 /**
- * Sprint capacity in person-hours, from the project's active personnel.
- * Compared against the sprint's planned hours so over-commitment is visible at
- * planning time instead of at the retrospective the team is not going to hold.
+ * Sprint capacity in person-hours, from the project's active personnel, set
+ * against the sprint's planned hours. Over-commitment shows at planning time
+ * rather than at a retrospective the team is not going to hold.
  */
 function computeCapacity(sprint = {}, personnel = [], metrics = {}) {
     const headcount = personnel.filter(person => (person.status ?? 'active') === 'active').length;
@@ -393,80 +471,115 @@ function computeCapacity(sprint = {}, personnel = [], metrics = {}) {
     };
 }
 
-// ── Product backlog ──────────────────────────────────────────────────────────
+// ── Product backlog, grouped by WBS ──────────────────────────────────────────
 
 /**
- * Everything not pulled into a sprint: tasks with no planned dates at all, plus
- * any dated task that falls outside every sprint window (possible when a task
- * runs past the project's own planned end).
+ * Stories not committed to any sprint, grouped by their WBS node.
  *
- * Ranked the way a PM would groom it — overdue first, then least schedule float,
- * then heaviest. There is no stored rank column and none is faked.
+ * The WBS is already the scope decomposition, so it is the natural backlog
+ * hierarchy: a WBS node is the epic, its tasks are the stories, and a sprint
+ * cuts horizontally across several nodes. Within a node, order is the way a PM
+ * grooms it — overdue first, then least schedule float, then largest.
  */
-function buildBacklog(tasks = [], sprints = [], today = utcToday()) {
-    const scheduled = new Set();
-    for (const sprint of sprints) {
-        for (const task of tasksInSprint(tasks, sprint)) scheduled.add(task.id);
+function buildBacklog(tasks = [], wbsNodes = [], today = utcToday()) {
+    const uncommitted = tasks
+        .filter(task => task.sprint_id == null && num(task.pct_complete) < 100)
+        .map(task => toCard(task, { today }));
+
+    const nodeById = new Map(wbsNodes.map(node => [String(node.id), node]));
+    const groups   = new Map();
+
+    for (const card of uncommitted) {
+        const key  = card.wbs_id == null ? 'unassigned' : String(card.wbs_id);
+        const node = nodeById.get(key);
+        if (!groups.has(key)) {
+            groups.set(key, {
+                wbs_id:   card.wbs_id ?? null,
+                wbs_code: node?.wbs_code ?? card.wbs_code ?? null,
+                name:     node?.name ?? null,
+                tasks:    [],
+            });
+        }
+        groups.get(key).tasks.push(card);
     }
 
-    return tasks
-        .filter(task => !scheduled.has(task.id) && num(task.pct_complete) < 100)
-        .map(task => toCard(task, today))
-        .sort((a, b) => {
-            if (a.days_overdue !== b.days_overdue) return b.days_overdue - a.days_overdue;
-            const floatA = a.float ?? Number.MAX_SAFE_INTEGER;
-            const floatB = b.float ?? Number.MAX_SAFE_INTEGER;
-            if (floatA !== floatB) return floatA - floatB;
-            return (b.story_points ?? 0) - (a.story_points ?? 0);
-        });
+    const byUrgency = (a, b) => {
+        if (a.days_overdue !== b.days_overdue) return b.days_overdue - a.days_overdue;
+        const floatA = a.float ?? Number.MAX_SAFE_INTEGER;
+        const floatB = b.float ?? Number.MAX_SAFE_INTEGER;
+        if (floatA !== floatB) return floatA - floatB;
+        return (b.story_points ?? 0) - (a.story_points ?? 0);
+    };
+
+    return [...groups.values()]
+        .map(group => {
+            group.tasks.sort(byUrgency);
+            return {
+                ...group,
+                task_count: group.tasks.length,
+                points:     round2(group.tasks.reduce((sum, card) => sum + (card.story_points ?? 0), 0)),
+            };
+        })
+        .sort((a, b) => String(a.wbs_code ?? '~').localeCompare(String(b.wbs_code ?? '~')));
 }
 
 // ── Composition ──────────────────────────────────────────────────────────────
 
+function groupTasksBySprint(tasks = []) {
+    const bySprint = new Map();
+    for (const task of tasks) {
+        if (task.sprint_id == null) continue;
+        const list = bySprint.get(task.sprint_id) ?? [];
+        list.push(task);
+        bySprint.set(task.sprint_id, list);
+    }
+    return bySprint;
+}
+
 /** Everything the Agile landing view needs in one shot. */
-function buildOverview({ project, tasks = [], dailyActuals = [], personnel = [], cadenceDays, now } = {}) {
-    const today   = utcToday(now);
-    const sprints = tileSprints(project, cadenceDays, today);
+function buildOverview({ sprints = [], tasks = [], wbsNodes = [], dailyActuals = [], personnel = [], now } = {}) {
+    const today    = utcToday(now);
+    const bySprint = groupTasksBySprint(tasks);
 
-    const summarised = sprints.map(sprint => {
-        const scope = tasksInSprint(tasks, sprint);
-        return { ...sprint, metrics: computeSprintMetrics(scope, today) };
-    });
+    const summarised = sprints.map(sprint => ({
+        ...sprint,
+        metrics: computeSprintMetrics(bySprint.get(sprint.id) ?? [], today),
+    }));
 
-    const active = summarised.find(sprint => sprint.state === 'active')
-        ?? summarised.find(sprint => sprint.state === 'planned')
+    const active = summarised.find(sprint => sprint.status === 'active')
+        ?? summarised.find(sprint => sprint.status === 'planning')
         ?? summarised[summarised.length - 1]
         ?? null;
 
     return {
-        cadence_days:      Number.isFinite(cadenceDays) && cadenceDays >= 1 ? Math.floor(cadenceDays) : DEFAULT_CADENCE_DAYS,
-        today:             today == null ? null : formatUtcDay(today),
-        sprints:           summarised,
-        active_sprint:     active ? active.number : null,
-        velocity:          computeVelocity(sprints, tasks, dailyActuals, today),
-        capacity:          active ? computeCapacity(active, personnel, active.metrics) : null,
-        backlog:           buildBacklog(tasks, sprints, today),
-        unestimated_total: tasks.filter(task => storyPoints(task) === null).length,
+        today:         today == null ? null : formatUtcDay(today),
+        sprints:       summarised,
+        active_sprint: active ? active.id : null,
+        velocity:      computeVelocity(sprints, bySprint, today),
+        capacity:      active ? computeCapacity(active, personnel, active.metrics) : null,
+        backlog:       buildBacklog(tasks, wbsNodes, today),
+        // Unsized stories inside sprints are what break the burndown, so this
+        // counts committed work only — an unsized product-backlog item is fine.
+        unestimated_committed: tasks.filter(task => task.sprint_id != null && pointsOf(task) === null).length,
     };
 }
 
 /** Board, metrics, capacity and burndown for one sprint. */
-function buildSprintDetail({ project, sprintNumber, tasks = [], dailyActuals = [], personnel = [], cadenceDays, now } = {}) {
-    const today   = utcToday(now);
-    const sprints = tileSprints(project, cadenceDays, today);
-    const sprint  = sprints.find(candidate => candidate.number === Number(sprintNumber));
+function buildSprintDetail({ sprint, tasks = [], dailyActuals = [], personnel = [], now } = {}) {
     if (!sprint) return null;
+    const today = utcToday(now);
 
-    const scope   = tasksInSprint(tasks, sprint);
+    const personnelById = new Map(personnel.map(person => [person.id, person]));
+    const scope   = tasks.filter(task => task.sprint_id === sprint.id);
     const metrics = computeSprintMetrics(scope, today);
-    const cards   = scope.map(task => toCard(task, today));
+    const cards   = scope.map(task => toCard(task, { personnelById, today }));
 
     const columns = Object.fromEntries(
-        BOARD_COLUMNS.map(column => [column, cards.filter(card => card.column === column)])
+        BOARD_COLUMNS.map(column => [column, cards.filter(card => card.board_status === column)])
     );
 
     return {
-        sprint:   { ...sprint, total_sprints: sprints.length },
+        sprint,
         metrics,
         capacity: computeCapacity(sprint, personnel, metrics),
         columns,
@@ -475,21 +588,23 @@ function buildSprintDetail({ project, sprintNumber, tasks = [], dailyActuals = [
 }
 
 module.exports = {
+    TASK_BOARD_STATUSES,
     BOARD_COLUMNS,
-    DEFAULT_CADENCE_DAYS,
+    SPRINT_STATUSES,
     buildOverview,
     buildSprintDetail,
+    normalizeSprintPayload,
+    findOverlappingSprint,
+    reconcileAgileUpdate,
     // exported for tests
-    tileSprints,
-    tasksInSprint,
-    storyPoints,
-    classifyTask,
+    suggestStoryPoints,
     toCard,
     computeSprintMetrics,
     computeBurndown,
     computeVelocity,
     computeCapacity,
     buildBacklog,
+    groupTasksBySprint,
     workingDays,
     utcToday,
 };

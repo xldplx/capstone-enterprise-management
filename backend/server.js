@@ -36,6 +36,7 @@ const equipment   = require('./controllers/equipmentController');
 const report      = require('./controllers/reportController');
 const readiness   = require('./controllers/planningReadinessController');
 const agile       = require('./controllers/agileController');
+const sprints     = require('./controllers/sprintsController');
 
 const app = express();
 
@@ -128,10 +129,21 @@ app.put   ('/api/tasks/:id',                          authenticate, authorize('P
 app.delete('/api/tasks/:id',                          authenticate, authorize('Project Manager'), tasks.deleteTask);
 
 // ── Agile ─────────────────────────────────────────────────────────────────────
-// Read-only derivations over tasks + daily_actuals + personnel — no agile state
-// is stored. Card movement reuses the daily-actuals and tasks routes above.
-app.get('/api/projects/:projectId/agile/overview',                authenticate, agile.getAgileOverview);
-app.get('/api/projects/:projectId/agile/sprints/:sprintNumber',   authenticate, agile.getSprintDetail);
+// Sprint lifecycle and board moves are NOT gated by the baseline lock: a frozen
+// baseline stops the plan changing, not the team delivering against it.
+app.get   ('/api/projects/:projectId/agile/overview',          authenticate, agile.getAgileOverview);
+app.get   ('/api/projects/:projectId/agile/sprints/:sprintId', authenticate, agile.getSprintDetail);
+
+app.get   ('/api/projects/:projectId/sprints', authenticate, sprints.getSprintsByProject);
+app.post  ('/api/projects/:projectId/sprints', authenticate, authorize('Project Manager', 'Planner'), sprints.createSprint);
+app.put   ('/api/sprints/:id',                 authenticate, authorize('Project Manager', 'Planner'), sprints.updateSprint);
+app.patch ('/api/sprints/:id/start',           authenticate, authorize('Project Manager', 'Planner'), sprints.startSprint);
+app.patch ('/api/sprints/:id/complete',        authenticate, authorize('Project Manager', 'Planner'), sprints.completeSprint);
+app.delete('/api/sprints/:id',                 authenticate, authorize('Project Manager'), sprints.deleteSprint);
+
+// Sprint planning (bulk commit) and board moves.
+app.post ('/api/projects/:projectId/sprints/:sprintId/commit', authenticate, authorize('Project Manager', 'Planner'), tasks.commitTasksToSprint);
+app.patch('/api/tasks/:id/agile', authenticate, authorize('Project Manager', 'Planner', 'Cost Engineer', 'Site Engineer'), tasks.updateTaskAgile);
 
 // ── Report ────────────────────────────────────────────────────────────────────
 app.get  ('/api/projects/:projectId/report/critical', authenticate, report.getCriticalActivities);
