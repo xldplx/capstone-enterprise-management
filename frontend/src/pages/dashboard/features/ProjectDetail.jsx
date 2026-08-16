@@ -236,6 +236,7 @@ function WbsPicker({ leafNodes, allNodes, overrides, value, onChange }) {
 export default function ProjectDetail({ project, onBack }) {
     const [tasks, setTasks]       = useState([]);
     const [wbsNodes, setWbsNodes] = useState([]);
+    const [sprints, setSprints]   = useState([]);
     const [loadingTasks, setLoadingTasks] = useState(true);
 
     const [selectedWbsId, setSelectedWbsId] = useState(null);
@@ -294,11 +295,15 @@ export default function ProjectDetail({ project, onBack }) {
     const fetchData = async () => {
         setLoadingTasks(true);
         try {
-            const [taskRes, wbsRes, baselineRes] = await Promise.all([
+            const [taskRes, wbsRes, baselineRes, sprintRes] = await Promise.all([
                 apiFetch(`/projects/${project.id}/tasks`),
                 apiFetch(`/projects/${project.id}/wbs`),
                 apiFetch(`/projects/${project.id}/tasks/baseline`).catch(() => ({ success: false })),
+                // Sprint names label the task rows. Tolerate a failure so this
+                // page keeps working if the agile tables are not in place yet.
+                apiFetch(`/projects/${project.id}/sprints`).catch(() => ({ data: [] })),
             ]);
+            setSprints(sprintRes.data || []);
             const fetchedTasks = taskRes.data || [];
             setTasks(fetchedTasks);
             setWbsNodes(wbsRes.data || []);
@@ -452,6 +457,7 @@ export default function ProjectDetail({ project, onBack }) {
         [tasks, wbsNodes, selectedNode],
     );
     const taskCounts = useMemo(() => buildWbsTaskCounts(tasks, wbsNodes), [wbsNodes, tasks]);
+    const sprintById = useMemo(() => new Map(sprints.map(sprint => [sprint.id, sprint])), [sprints]);
     const anyExpandable = wbsNodes.some(n => wbsNodes.some(m => m.parent_id !== null && String(m.parent_id) === String(n.id)));
 
     const totalCost   = filteredTasks.reduce((s, t) => s + parseFloat(t.planned_cost   || 0), 0);
@@ -961,12 +967,13 @@ export default function ProjectDetail({ project, onBack }) {
                                     <th className="px-4 py-4">Planned Cost</th>
                                     <th className="px-4 py-4">Hours</th>
                                     <th className="px-4 py-4">Weight</th>
+                                    <th className="px-4 py-4">Sprint</th>
                                     <th className="px-4 py-4 text-right">{canEdit ? 'Actions' : ''}</th>
                                 </tr>
                             </thead>
                             <tbody className="text-sm font-medium text-slate-600 divide-y divide-slate-50">
                                 {loadingTasks ? (
-                                    <tr><td colSpan="9" className="px-6 py-12 text-center"><Loader2 className="w-6 h-6 animate-spin text-slate-300 mx-auto" /></td></tr>
+                                    <tr><td colSpan="10" className="px-6 py-12 text-center"><Loader2 className="w-6 h-6 animate-spin text-slate-300 mx-auto" /></td></tr>
                                 ) : filteredTasks.length > 0 ? (
                                     filteredTasks.map(task => (
                                         <tr key={task.id} className={`transition-colors ${highlightedTaskIds.some(id => String(id) === String(task.id)) ? 'bg-amber-50/80' : 'hover:bg-slate-50/50'}`}>
@@ -986,6 +993,17 @@ export default function ProjectDetail({ project, onBack }) {
                                                 <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-xs font-bold px-2 py-0.5 rounded-lg">
                                                     {(parseFloat(task.weight || 0) * 100).toFixed(0)}%
                                                 </span>
+                                            </td>
+                                            {/* Which sprint has committed to this task. The plan and the
+                                                board are two views of this one row, so they must agree. */}
+                                            <td className="px-4 py-3.5">
+                                                {sprintById.get(task.sprint_id) ? (
+                                                    <span className="bg-slate-100 text-slate-600 border border-slate-200 text-xs font-bold px-2 py-0.5 rounded-lg">
+                                                        {sprintById.get(task.sprint_id).name}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-xs text-slate-300 font-bold">Backlog</span>
+                                                )}
                                             </td>
 
                                             <td className="px-4 py-3.5 text-right">
@@ -1018,7 +1036,7 @@ export default function ProjectDetail({ project, onBack }) {
                                     ))
                                 ) : (
                                     <tr>
-                                        <td colSpan="9" className="px-6 py-12 text-center text-slate-400">
+                                        <td colSpan="10" className="px-6 py-12 text-center text-slate-400">
                                             <div className="flex flex-col items-center justify-center gap-2">
                                                 <ListTodo className="w-10 h-10 text-slate-200" />
                                                 <p>No tasks under this WBS node.</p>

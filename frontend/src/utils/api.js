@@ -57,12 +57,24 @@ export const tasksApi = {
 };
 
 // ─── AGILE ────────────────────────────────────────────────────────────────────
-// Read-only: sprints, board columns and burndown are derived server-side from
-// tasks + daily_actuals, never stored. Moving a card is a progress write, so it
-// goes through dailyActualsApi.submit (forward) or tasksApi.update (correction).
+// Sprints and board state are real rows. updateAgile covers board moves, sprint
+// commitment, estimation and assignment; none of it is blocked by the baseline
+// lock, because a frozen plan should not stop the team delivering against it.
 export const agileApi = {
-    getOverview:     (projectId, cadence)               => apiFetch(`/projects/${projectId}/agile/overview?cadence=${cadence}`),
-    getSprintDetail: (projectId, sprintNumber, cadence) => apiFetch(`/projects/${projectId}/agile/sprints/${sprintNumber}?cadence=${cadence}`),
+    getOverview:     (projectId)           => apiFetch(`/projects/${projectId}/agile/overview`),
+    getSprintDetail: (projectId, sprintId) => apiFetch(`/projects/${projectId}/agile/sprints/${sprintId}`),
+    updateAgile:     (taskId, payload)     => apiFetch(`/tasks/${taskId}/agile`, { method: 'PATCH', body: JSON.stringify(payload) }),
+    commitToSprint:  (projectId, sprintId, taskIds) =>
+        apiFetch(`/projects/${projectId}/sprints/${sprintId}/commit`, { method: 'POST', body: JSON.stringify({ task_ids: taskIds }) }),
+};
+
+export const sprintsApi = {
+    getByProject: (projectId)          => apiFetch(`/projects/${projectId}/sprints`),
+    create:       (projectId, payload) => apiFetch(`/projects/${projectId}/sprints`, { method: 'POST', body: JSON.stringify(payload) }),
+    update:       (id, payload)        => apiFetch(`/sprints/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    start:        (id)                 => apiFetch(`/sprints/${id}/start`,    { method: 'PATCH' }),
+    complete:     (id)                 => apiFetch(`/sprints/${id}/complete`, { method: 'PATCH' }),
+    delete:       (id)                 => apiFetch(`/sprints/${id}`, { method: 'DELETE' }),
 };
 
 // ─── WBS ──────────────────────────────────────────────────────────────────────
