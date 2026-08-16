@@ -269,6 +269,17 @@ test('progress with no ledger row still lands on the latest plotted day', () => 
     assert.equal(days[2].remaining, 0);  // today reconciles with the task row
 });
 
+test('a finished sprint is not credited with work completed after it closed', () => {
+    // Done now, but the ledger has no entry inside the sprint window.
+    const tasks = [task({ id: 1, weight: 0.08, pct_complete: 100 })];
+
+    const { days } = agile.computeBurndown(sprint, tasks, [], day('2026-03-20'));
+
+    // Every day stays at 8: reconciling the last point here would rewrite
+    // history and disagree with computeVelocity, which measures at sprint end.
+    assert.deepEqual(days.map(d => d.remaining), [8, 8, 8, 8, 8]);
+});
+
 test('a sprint with no committed points burns down flat at zero', () => {
     const { days, committed_points } = agile.computeBurndown(
         sprint, [task({ id: 1, weight: 0 })], [], day('2026-03-06'));

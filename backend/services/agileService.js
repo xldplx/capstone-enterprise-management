@@ -259,10 +259,20 @@ function computeSprintMetrics(sprintTasks = [], today = utcToday()) {
  * Two deliberate details:
  *  - Days after today are null, not flat. A flat line into the future reads as
  *    "the team stalled" instead of "those days have not happened yet".
- *  - The most recent plotted day is reconciled against the task's current
- *    pct_complete. Progress entered through the task endpoint rather than the
- *    daily-actuals form leaves no ledger row, and without this the chart would
- *    end on a figure the rest of the app disagrees with.
+ *  - For a sprint still running, the latest plotted day is reconciled against
+ *    the task's current pct_complete. Progress entered through the task endpoint
+ *    rather than the daily-actuals form leaves no ledger row, and without this
+ *    the chart would end on a figure the rest of the app disagrees with. A
+ *    FINISHED sprint is never reconciled — crediting it with work completed
+ *    after it closed would rewrite history and contradict computeVelocity,
+ *    which measures each sprint strictly as at its own end date.
+ *
+ * Known limitation, inherent to deriving sprint scope from task dates: the
+ * committed total is computed from CURRENT sprint membership, so re-planning a
+ * task's dates into or out of this sprint redraws the whole history rather than
+ * showing up as a step. A tool with a stored sprint backlog would draw a
+ * separate scope line here; that needs a table to record what was committed and
+ * when, which this schema does not have.
  */
 function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today = utcToday()) {
     const start = parseUtcDay(sprint.start_date);
@@ -275,7 +285,8 @@ function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today
 
     const totalDays = Math.round((end - start) / DAY_MS) + 1;
     const step      = totalDays > 1 ? committed / (totalDays - 1) : committed;
-    const lastReal  = Math.min(today, end);
+    // Only a sprint that is still open gets its final point reconciled.
+    const reconcileDay = today <= end ? today : null;
 
     const days = [];
     for (let index = 0; index < totalDays; index += 1) {
@@ -292,7 +303,7 @@ function computeBurndown(sprint = {}, sprintTasks = [], dailyActuals = [], today
             const points = pointsFor.get(task.id) ?? 0;
             if (points === 0) continue;
             let pct = pctOnDay(ledger, task.id, day);
-            if (day === lastReal) pct = Math.max(pct, num(task.pct_complete));
+            if (day === reconcileDay) pct = Math.max(pct, num(task.pct_complete));
             burned += points * Math.min(100, pct) / 100;
         }
 

@@ -100,6 +100,18 @@ export default function SprintBoard({ columns, canMove, busyTaskId, onMove }) {
         onMove(card, column);
     };
 
+    // An entirely empty sprint gets one explanation rather than four empty
+    // columns stacked above a duplicate of the same message.
+    if (BOARD_COLUMNS.every(column => (columns[column] || []).length === 0)) {
+        return (
+            <EmptyState
+                icon={AlertTriangle}
+                title={t('agile.noTasksInSprint')}
+                hint={t('agile.noTasksInSprintHint')}
+            />
+        );
+    }
+
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
             {BOARD_COLUMNS.map(column => {
@@ -161,16 +173,6 @@ export default function SprintBoard({ columns, canMove, busyTaskId, onMove }) {
                     </div>
                 );
             })}
-
-            {BOARD_COLUMNS.every(column => (columns[column] || []).length === 0) && (
-                <div className="xl:col-span-4">
-                    <EmptyState
-                        icon={AlertTriangle}
-                        title={t('agile.noTasksInSprint')}
-                        hint={t('agile.noTasksInSprintHint')}
-                    />
-                </div>
-            )}
         </div>
     );
 }

@@ -55,6 +55,7 @@ export default function Agile() {
 
     const [busyTaskId, setBusyTaskId] = useState(null);
     const [moveError, setMoveError]   = useState('');
+    const [moveNotice, setMoveNotice] = useState('');
     const [pctPrompt, setPctPrompt]   = useState(null); // { card, value }
 
     const userRole   = localStorage.getItem('userRole');
@@ -113,8 +114,16 @@ export default function Agile() {
 
     // ── Card movement ─────────────────────────────────────────────────────────
 
+    // 'at_risk' is derived from an overdue planned_end, so recording progress on
+    // an overdue task leaves the card exactly where it was. Say so — a card that
+    // does not move after a successful write otherwise reads as a failure.
+    const willStayAtRisk = (card, targetPct) => card.column === 'at_risk' && targetPct < 100;
+
     const applyMove = async (card, targetPct) => {
-        if (targetPct === card.pct_complete) return;
+        if (targetPct === card.pct_complete) {
+            setMoveNotice(willStayAtRisk(card, targetPct) ? t('agile.stillAtRisk') : '');
+            return;
+        }
         const isForward = targetPct > card.pct_complete;
 
         if (!isForward && !canCorrect) {
@@ -139,12 +148,13 @@ export default function Agile() {
                 }]);
             } else {
                 // Backward corrections, and forward moves by a role that cannot
-                // file daily actuals, go straight at the task. The burndown
-                // reconciles its latest point against pct_complete, so the chart
-                // still ends on the truth even with no ledger row.
+                // file daily actuals, go straight at the task. A running sprint's
+                // burndown reconciles its latest point against pct_complete, so
+                // the chart still ends on the truth even with no ledger row.
                 await tasksApi.update(card.id, { pct_complete: targetPct });
             }
             await Promise.all([fetchOverview(), fetchDetail()]);
+            setMoveNotice(willStayAtRisk(card, targetPct) ? t('agile.stillAtRisk') : '');
         } catch (error) {
             setMoveError(error.message || t('agile.moveFailed'));
         } finally {
@@ -154,6 +164,7 @@ export default function Agile() {
 
     const handleMove = (card, targetColumn) => {
         setMoveError('');
+        setMoveNotice('');
         if (targetColumn === card.column) return;
 
         const targetPct = COLUMN_TARGET_PCT[targetColumn];
@@ -301,6 +312,13 @@ export default function Agile() {
                     {moveError && (
                         <div role="alert" className="p-4 rounded-2xl bg-rose-50/80 border border-rose-100 text-rose-600 text-xs font-bold">
                             {moveError}
+                        </div>
+                    )}
+
+                    {moveNotice && !moveError && (
+                        <div role="status" className="flex items-start gap-3 p-4 rounded-2xl bg-amber-50/80 border border-amber-100 text-amber-700">
+                            <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                            <p className="text-xs font-bold leading-relaxed">{moveNotice}</p>
                         </div>
                     )}
 

@@ -12,25 +12,33 @@ import { useTranslation } from '../../../../utils/i18n';
 import { CARD_CLASS } from '../../../../utils/uiConstants';
 import { formatWholeNumber } from '../../../../utils/numberFormat';
 
+// Matches the metric cards on Overview — same container, icon chip, label and
+// value typography — so the Agile page reads as part of the same dashboard.
 function MetricCard({ icon: Icon, label, value, unit, hint, tone = 'slate' }) {
     const tones = {
-        slate:   'text-slate-700',
-        emerald: 'text-emerald-700',
-        rose:    'text-rose-700',
-        blue:    'text-blue-700',
+        slate:   { chip: 'bg-slate-50 text-slate-500 border-slate-200',      halo: 'bg-slate-50' },
+        emerald: { chip: 'bg-emerald-50 text-emerald-650 border-emerald-100', halo: 'bg-emerald-50/50' },
+        rose:    { chip: 'bg-rose-50 text-rose-600 border-rose-100',          halo: 'bg-rose-50/50' },
+        blue:    { chip: 'bg-blue-50 text-blue-600 border-blue-100',          halo: 'bg-blue-50/50' },
     };
+    const palette = tones[tone] || tones.slate;
 
     return (
-        <div className="bg-white/70 border border-slate-200/60 rounded-[1.5rem] p-6 shadow-sm">
-            <div className="flex items-center gap-2 text-slate-400 mb-3">
-                {Icon && <Icon className="w-4 h-4" />}
-                <span className="text-[9px] font-black uppercase tracking-[0.15em]">{label}</span>
+        <div className={`${CARD_CLASS} p-6 bg-white border border-slate-200/60 rounded-3xl shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 relative overflow-hidden group`}>
+            <div className={`absolute top-0 right-0 w-24 h-24 ${palette.halo} rounded-full translate-x-8 -translate-y-8 group-hover:scale-110 transition-transform duration-500 pointer-events-none`} />
+            <div className={`p-3 rounded-xl border shadow-inner w-fit mb-4 relative z-10 ${palette.chip}`}>
+                {Icon && <Icon className="w-5 h-5" />}
             </div>
-            <p className={`text-2xl font-black tracking-tight leading-none ${tones[tone]}`}>
+            <h3 className="text-slate-400 text-[10px] font-bold uppercase tracking-wider relative z-10">{label}</h3>
+            <p className="text-2xl font-extrabold text-slate-800 tracking-tight mt-1 relative z-10">
                 {value}
                 {unit && <span className="text-xs font-bold text-slate-400 ml-1.5">{unit}</span>}
             </p>
-            {hint && <p className="text-[10px] font-bold text-slate-400 mt-2 leading-relaxed">{hint}</p>}
+            {hint && (
+                <div className="mt-4 pt-3 border-t border-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-tight relative z-10">
+                    {hint}
+                </div>
+            )}
         </div>
     );
 }
@@ -46,7 +54,7 @@ export default function SprintSummary({ metrics, capacity, velocity }) {
 
     return (
         <div className="space-y-8">
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <MetricCard
                     icon={Target}
                     label={t('agile.committed')}

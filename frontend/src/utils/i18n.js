@@ -66,6 +66,7 @@ export const translations = {
         'agile.confirmBackward':   'This lowers recorded progress from {from}% to {to}% and changes the earned value for this task. Continue?',
         'agile.cannotCorrect':     'Your role cannot lower recorded progress. Ask a Project Manager or Planner to correct it.',
         'agile.moveFailed':        'Could not record that move.',
+        'agile.stillAtRisk':       'Progress saved. The card stays in At Risk because this task’s planned end date has already passed — move that date on the project plan to clear it.',
 
         'agile.committed':         'Committed',
         'agile.completed':         'Completed',
@@ -698,6 +699,7 @@ export const translations = {
         'agile.confirmBackward':   'Ini menurunkan kemajuan tercatat dari {from}% menjadi {to}% dan mengubah earned value tugas ini. Lanjutkan?',
         'agile.cannotCorrect':     'Peran Anda tidak dapat menurunkan kemajuan tercatat. Minta Project Manager atau Planner untuk memperbaikinya.',
         'agile.moveFailed':        'Perpindahan tidak dapat dicatat.',
+        'agile.stillAtRisk':       'Kemajuan tersimpan. Kartu tetap di Berisiko karena tanggal akhir rencana tugas ini sudah lewat — ubah tanggal tersebut pada rencana proyek untuk menghapusnya.',
 
         'agile.committed':         'Dikomitmenkan',
         'agile.completed':         'Selesai',
