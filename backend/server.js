@@ -35,6 +35,7 @@ const materials   = require('./controllers/materialsController');
 const equipment   = require('./controllers/equipmentController');
 const report      = require('./controllers/reportController');
 const readiness   = require('./controllers/planningReadinessController');
+const agile       = require('./controllers/agileController');
 
 const app = express();
 
@@ -125,6 +126,12 @@ app.get   ('/api/projects/:projectId/tasks',          authenticate, tasks.getTas
 app.post  ('/api/projects/:projectId/tasks',          authenticate, authorize('Project Manager', 'Planner'), tasks.createTask);
 app.put   ('/api/tasks/:id',                          authenticate, authorize('Project Manager', 'Planner', 'Cost Engineer'), tasks.updateTask);
 app.delete('/api/tasks/:id',                          authenticate, authorize('Project Manager'), tasks.deleteTask);
+
+// ── Agile ─────────────────────────────────────────────────────────────────────
+// Read-only derivations over tasks + daily_actuals + personnel — no agile state
+// is stored. Card movement reuses the daily-actuals and tasks routes above.
+app.get('/api/projects/:projectId/agile/overview',                authenticate, agile.getAgileOverview);
+app.get('/api/projects/:projectId/agile/sprints/:sprintNumber',   authenticate, agile.getSprintDetail);
 
 // ── Report ────────────────────────────────────────────────────────────────────
 app.get  ('/api/projects/:projectId/report/critical', authenticate, report.getCriticalActivities);
