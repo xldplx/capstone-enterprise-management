@@ -56,6 +56,15 @@ export const tasksApi = {
     lockBaseline: (projectId, baselineName) => apiFetch(`/projects/${projectId}/tasks/baseline`, { method: 'POST', body: JSON.stringify({ baseline_name: baselineName }) }),
 };
 
+// ─── AGILE ────────────────────────────────────────────────────────────────────
+// Read-only: sprints, board columns and burndown are derived server-side from
+// tasks + daily_actuals, never stored. Moving a card is a progress write, so it
+// goes through dailyActualsApi.submit (forward) or tasksApi.update (correction).
+export const agileApi = {
+    getOverview:     (projectId, cadence)               => apiFetch(`/projects/${projectId}/agile/overview?cadence=${cadence}`),
+    getSprintDetail: (projectId, sprintNumber, cadence) => apiFetch(`/projects/${projectId}/agile/sprints/${sprintNumber}?cadence=${cadence}`),
+};
+
 // ─── WBS ──────────────────────────────────────────────────────────────────────
 export const wbsApi = {
     getByProject: (projectId)          => apiFetch(`/projects/${projectId}/wbs`),

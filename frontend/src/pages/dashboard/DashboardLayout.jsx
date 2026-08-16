@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import {
     LayoutDashboard, Users, LogOut, ChevronUp, User, Settings,
-    FolderKanban, ClipboardList, BarChart3, Bell, Upload,
+    FolderKanban, ClipboardList, BarChart3, Bell, Upload, KanbanSquare,
     Wrench, Package, Hammer, Wallet, FileText, ChevronLeft, ChevronRight, Menu,
     MessageSquare, Send, X, Loader2, Sparkles
 } from 'lucide-react';
@@ -24,6 +24,7 @@ function formatMarkdownText(text) {
 
 import Overview     from './features/Overview';
 import Analytics    from './features/Analytics';
+import Agile        from './features/Agile';
 import Manpower     from './features/Manpower';
 import Projects     from './features/Projects';
 import DailyActuals from './features/DailyActuals';
@@ -45,6 +46,7 @@ const PAGE_SLUGS = {
     'Analytics':      'analytics',
     'Plan vs Actual': 'plan-vs-actual',
     'Projects':       'projects',
+    'Agile':          'agile',
     'Daily Actuals':  'daily-actuals',
     'Manpower':       'manpower',
     'Equipment':      'equipment',
@@ -130,6 +132,7 @@ export default function DashboardLayout() {
         { id: 'Analytics',      labelKey: 'nav.analytics',     icon: <BarChart3 className="w-5 h-5" />,       allowedRoles: ['Project Manager','Planner','Cost Engineer','Management'] },
         { id: 'Plan vs Actual', labelKey: 'nav.planVsActual',  icon: <BarChart3 className="w-5 h-5" />,       allowedRoles: ['Project Manager','Planner','Cost Engineer','Management'] },
         { id: 'Projects',       labelKey: 'nav.projects',      icon: <FolderKanban className="w-5 h-5" />,    allowedRoles: ['Project Manager','Planner','Cost Engineer','Site Engineer','Management'] },
+        { id: 'Agile',          labelKey: 'nav.agile',         icon: <KanbanSquare className="w-5 h-5" />,    allowedRoles: ['Project Manager','Planner','Cost Engineer','Site Engineer','Management'] },
         { id: 'Daily Actuals',  labelKey: 'nav.dailyActuals',  icon: <ClipboardList className="w-5 h-5" />,   allowedRoles: ['Project Manager','Planner','Site Engineer'] },
         { id: 'Manpower',       labelKey: 'nav.manpower',      icon: <Users className="w-5 h-5" />,           allowedRoles: ['Project Manager','Planner','Site Engineer'] },
         { id: 'Equipment',      labelKey: 'nav.equipment',     icon: <Wrench className="w-5 h-5" />,          allowedRoles: ['Project Manager','Planner','Site Engineer'] },
@@ -147,6 +150,7 @@ export default function DashboardLayout() {
         'Overview':       Overview,
         'Analytics':      Analytics,
         'Projects':       Projects,
+        'Agile':          Agile,
         'Manpower':       Manpower,
         'Daily Actuals':  DailyActuals,
         'Plan vs Actual': PlanVsActual,
@@ -176,6 +180,7 @@ export default function DashboardLayout() {
         'Analytics': { title: t('nav.analytics'), subtitle: 'Predictive modeling, production graphs, and statistical dashboards' },
         'Plan vs Actual': { title: t('nav.planVsActual'), subtitle: 'Comparison of planned timelines against real-time field progress' },
         'Projects': { title: t('nav.projects'), subtitle: 'Comprehensive lists of all active, pending, and completed projects' },
+        'Agile': { title: t('nav.agile'), subtitle: 'Sprint board, burndown, velocity, and product backlog' },
         'Daily Actuals': { title: t('nav.dailyActuals'), subtitle: 'Daily site activity logs, resource logs, and output records' },
         'Manpower': { title: t('nav.manpower'), subtitle: 'Workforce deployment, hour records, and allocation matrices' },
         'Equipment': { title: t('nav.equipment'), subtitle: 'Heavy machinery tracking, utilization logging, and fleet status' },
