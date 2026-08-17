@@ -99,6 +99,11 @@ const updateSprint = async (req, res) => {
         const sprint  = await loadSprint(req.params.id);
         const payload = agile.normalizeSprintPayload(req.body, { partial: true });
 
+        // A finished sprint is a historical record: velocity and its burndown are
+        // both derived from its dates, so moving them silently rewrites the past.
+        if (sprint.status === 'completed')
+            return res.status(409).json({ success: false, code: 'SPRINT_COMPLETED', message: 'This sprint is completed. Its dates and goal can no longer be changed.' });
+
         if (payload.start_date || payload.end_date) {
             const { data: others, error: listError } = await supabase
                 .from('sprints').select('*')
@@ -165,6 +170,11 @@ const completeSprint = async (req, res) => {
         const sprint = await loadSprint(req.params.id);
         if (sprint.status === 'completed')
             return res.status(409).json({ success: false, code: 'SPRINT_ALREADY_COMPLETE', message: 'This sprint is already completed.' });
+        // Completing a sprint that never ran would return its stories to the
+        // backlog and add a zero to velocity, both of which describe work that
+        // was never attempted. Cancel it instead.
+        if (sprint.status !== 'active')
+            return res.status(409).json({ success: false, code: 'SPRINT_NOT_ACTIVE', message: `This sprint is still in ${sprint.status}. Start it before completing it.` });
 
         // Standard Scrum: unfinished stories return to the product backlog so the
         // next sprint can re-commit them deliberately, rather than inheriting
