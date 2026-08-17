@@ -47,6 +47,18 @@ export const SPRINT_STATE_STYLES = {
 // Offered when sizing a story by hand. Matches the scale the backfill snapped to.
 export const POINT_SCALE = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
 
+/**
+ * Split a stored Definition of Done into checklist lines, ignoring blanks and
+ * any bullet the user typed themselves. Lives here rather than beside the
+ * component so fast refresh keeps working (react-refresh/only-export-components).
+ */
+export function toChecklist(text) {
+    return String(text || '')
+        .split('\n')
+        .map(line => line.replace(/^\s*[-*•]\s*/, '').trim())
+        .filter(Boolean);
+}
+
 /** Short "12 Mar" form used in sprint chips and chart axes. */
 export function formatShortDate(value) {
     if (!value) return '';

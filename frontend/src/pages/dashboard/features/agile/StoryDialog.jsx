@@ -7,13 +7,14 @@
  * stay on the Project Detail page where the lock applies.
  */
 import { useState } from 'react';
-import { X, Loader2, Ban } from 'lucide-react';
+import { X, Loader2, Ban, CheckSquare } from 'lucide-react';
 import { useTranslation } from '../../../../utils/i18n';
 import { INPUT_CLASS, NULL_DISPLAY } from '../../../../utils/uiConstants';
-import { POINT_SCALE, COLUMN_STYLES, BOARD_COLUMNS } from '../../../../utils/agileConstants';
+import { POINT_SCALE, COLUMN_STYLES, BOARD_COLUMNS, toChecklist } from '../../../../utils/agileConstants';
 
-export default function StoryDialog({ card, personnel, canEdit, onClose, onSave, onRemoveFromSprint }) {
+export default function StoryDialog({ card, personnel, canEdit, project, onClose, onSave, onRemoveFromSprint }) {
     const { t } = useTranslation();
+    const definitionOfDone = toChecklist(project?.definition_of_done);
 
     const [form, setForm] = useState({
         story_points:   card.story_points ?? '',
@@ -140,6 +141,25 @@ export default function StoryDialog({ card, personnel, canEdit, onClose, onSave,
                             ))}
                         </select>
                     </div>
+
+                    {/* The Definition of Done only matters at the moment someone
+                        calls a story done, so that is the only place it appears. */}
+                    {form.board_status === 'done' && definitionOfDone.length > 0 && (
+                        <div className="p-5 rounded-2xl bg-emerald-50/60 border border-emerald-100 animate-in fade-in duration-200">
+                            <div className="flex items-center gap-2 text-emerald-700 mb-3">
+                                <CheckSquare className="w-3.5 h-3.5" />
+                                <span className="text-[9px] font-black uppercase tracking-[0.15em]">{t('agile.dodReminder')}</span>
+                            </div>
+                            <ul className="space-y-2">
+                                {definitionOfDone.map((item, index) => (
+                                    <li key={index} className="flex items-start gap-2 text-xs font-bold text-emerald-800 leading-relaxed">
+                                        <CheckSquare className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                                        {item}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
 
                     {form.board_status === 'blocked' && (
                         <div className="space-y-2 animate-in fade-in duration-200">

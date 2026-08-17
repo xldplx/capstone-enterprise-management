@@ -168,7 +168,11 @@ const createProject = async (req, res) => {
 
 const updateProject = async (req, res) => {
     const updates = {};
-    ['project_name','description','planned_start','planned_end','total_budget','status','schedule_pct']
+    // product_goal and definition_of_done are the Scrum artifact commitments —
+    // team agreements, not plan data. They are deliberately absent from
+    // planningFields below so the baseline lock cannot freeze them.
+    ['project_name','description','planned_start','planned_end','total_budget','status','schedule_pct',
+     'product_goal','definition_of_done']
         .forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
     if (req.body.schedule_pct !== undefined) {
         const normalizedSchedulePct = parseSchedulePctInput(req.body.schedule_pct);

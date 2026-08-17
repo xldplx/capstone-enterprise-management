@@ -47,7 +47,9 @@ const TASK_COLUMNS = [
 /** One round trip for everything the page derives from. */
 async function loadProjectAgileData(projectId) {
     const [projectResult, sprints, tasks, wbsNodes, dailyActuals, personnelResult] = await Promise.all([
-        supabase.from('projects').select('id, project_name, project_code, planned_start, planned_end').eq('id', projectId).single(),
+        supabase.from('projects')
+            .select('id, project_name, project_code, planned_start, planned_end, product_goal, definition_of_done')
+            .eq('id', projectId).single(),
         fetchAllRows(() => supabase.from('sprints').select('*').eq('project_id', projectId).order('sprint_number')),
         fetchAllRows(() => supabase.from('tasks').select(TASK_COLUMNS).eq('project_id', projectId).order('wbs_code')),
         fetchAllRows(() => supabase.from('wbs').select('id, wbs_code, name, parent_id, level').eq('project_id', projectId).order('wbs_code')),

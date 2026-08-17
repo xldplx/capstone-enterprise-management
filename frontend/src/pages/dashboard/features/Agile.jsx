@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
     KanbanSquare, Loader2, Plus, Play, CheckCircle2, Pencil, Info, Target,
 } from 'lucide-react';
-import { apiFetch, agileApi, sprintsApi } from '../../../utils/api';
+import { apiFetch, agileApi, sprintsApi, projectsApi } from '../../../utils/api';
 import { useTranslation } from '../../../utils/i18n';
 import { CARD_CLASS, INPUT_CLASS } from '../../../utils/uiConstants';
 import { SPRINT_STATE_STYLES, formatShortDate } from '../../../utils/agileConstants';
@@ -28,6 +28,7 @@ import StoryDialog from './agile/StoryDialog';
 import BurndownChart from './agile/BurndownChart';
 import SprintSummary from './agile/SprintSummary';
 import ProductBacklog from './agile/ProductBacklog';
+import TeamAgreements from './agile/TeamAgreements';
 
 // Mirrors the route authorization in server.js.
 const CAN_PLAN_SPRINTS = ['Project Manager', 'Planner'];
@@ -153,6 +154,12 @@ export default function Agile() {
     const removeFromSprint = async () => {
         await runAction(() => agileApi.updateAgile(storyDialog.id, { sprint_id: null }), { taskId: storyDialog.id });
         setStoryDialog(null);
+    };
+
+    // Product Goal and Definition of Done live on the project, so this reuses the
+    // existing project endpoint rather than adding an agile-specific one.
+    const saveAgreements = async (payload) => {
+        await runAction(() => projectsApi.update(selectedProjectId, payload));
     };
 
     const commitToSprint = async (taskIds) => {
@@ -370,6 +377,12 @@ export default function Agile() {
                         </>
                     ))}
 
+                    <TeamAgreements
+                        project={overview.project}
+                        canEdit={canPlan}
+                        onSave={saveAgreements}
+                    />
+
                     <ProductBacklog
                         backlog={overview.backlog || []}
                         targetSprint={currentSprint}
@@ -392,6 +405,7 @@ export default function Agile() {
                 <StoryDialog
                     card={storyDialog}
                     personnel={overview?.personnel || []}
+                    project={overview?.project}
                     canEdit={canMove}
                     onClose={() => setStoryDialog(null)}
                     onSave={saveStory}
