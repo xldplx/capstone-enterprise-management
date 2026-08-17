@@ -224,6 +224,34 @@ test('an empty sprint reports zeroes, not NaN', () => {
     assert.equal(metrics.completion_pct, 0);
 });
 
+// A story dragged to Done after the sprint closed still shows on the board, but
+// the sprint it was committed to did not deliver it. Metrics has to agree with
+// velocity here, or the header reads 100% beside a velocity bar of zero.
+test('a story finished after the sprint ended is done, but not done in that sprint', () => {
+    const sprint = { start_date: '2026-03-01', end_date: '2026-03-14' };
+    const tasks  = [
+        task({ id: 1, story_points: 8, board_status: 'done', pct_complete: 100, completed_at: '2026-03-10' }),
+        task({ id: 2, story_points: 5, board_status: 'done', pct_complete: 100, completed_at: '2026-04-02' }),
+    ];
+
+    const metrics = agile.computeSprintMetrics(tasks, day('2026-05-01'), sprint);
+
+    assert.equal(metrics.completed_points, 13);            // board state: both done
+    assert.equal(metrics.completed_in_sprint_points, 8);   // only one landed in time
+});
+
+test('a running sprint credits work done so far, and an undated done story counts', () => {
+    const sprint = { start_date: '2026-03-01', end_date: '2026-03-14' };
+    const tasks  = [
+        task({ id: 1, story_points: 8, board_status: 'done', pct_complete: 100, completed_at: '2026-03-03' }),
+        task({ id: 2, story_points: 5, board_status: 'done', pct_complete: 100, completed_at: null }),
+    ];
+
+    const metrics = agile.computeSprintMetrics(tasks, day('2026-03-05'), sprint);
+
+    assert.equal(metrics.completed_in_sprint_points, 13);
+});
+
 // ── Burndown ─────────────────────────────────────────────────────────────────
 
 test('burndown burns exactly on the day each story completed', () => {

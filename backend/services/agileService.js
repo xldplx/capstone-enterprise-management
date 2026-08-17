@@ -315,21 +315,34 @@ function progressOnDay(task, ledger, day) {
 
 // ── Sprint metrics ───────────────────────────────────────────────────────────
 
-function computeSprintMetrics(sprintTasks = [], today = utcToday()) {
+function computeSprintMetrics(sprintTasks = [], today = utcToday(), sprint = null) {
     const cards  = sprintTasks.map(task => toCard(task, { today }));
     const counts = Object.fromEntries(TASK_BOARD_STATUSES.map(status => [status, 0]));
     cards.forEach(card => { counts[card.board_status] += 1; });
 
     const committedPoints = cards.reduce((sum, card) => sum + (card.story_points ?? 0), 0);
-    const completedPoints = cards
-        .filter(card => card.board_status === 'done')
-        .reduce((sum, card) => sum + (card.story_points ?? 0), 0);
+    const doneCards       = cards.filter(card => card.board_status === 'done');
+    const completedPoints = doneCards.reduce((sum, card) => sum + (card.story_points ?? 0), 0);
+
+    // Board state answers "is it done"; velocity and burndown answer "was it done
+    // in time". Reporting only the first made the header claim 100% while the
+    // burndown still showed points outstanding and velocity credited nothing.
+    // `as at` is the sprint's own end once it is over, and today while it runs.
+    const sprintEnd = parseUtcDay(sprint?.end_date);
+    const asAt      = sprintEnd != null && today != null ? Math.min(sprintEnd, today) : (sprintEnd ?? today);
+    const onTimePoints = doneCards.reduce((sum, card) => {
+        const done = parseUtcDay(card.completed_at ? String(card.completed_at).slice(0, 10) : null);
+        // An undated done story is taken at face value; only a known-late one is excluded.
+        return done != null && asAt != null && done > asAt ? sum : sum + (card.story_points ?? 0);
+    }, 0);
 
     return {
         task_count:        cards.length,
         counts,
         committed_points:  round2(committedPoints),
         completed_points:  round2(completedPoints),
+        // Same rule computeVelocity uses, so the two panels can no longer disagree.
+        completed_in_sprint_points: round2(onTimePoints),
         remaining_points:  round2(committedPoints - completedPoints),
         planned_hours:     round2(cards.reduce((sum, card) => sum + card.planned_hours, 0)),
         actual_hours:      round2(cards.reduce((sum, card) => sum + card.actual_hours, 0)),
@@ -543,7 +556,7 @@ function buildOverview({ sprints = [], tasks = [], wbsNodes = [], dailyActuals =
 
     const summarised = sprints.map(sprint => ({
         ...sprint,
-        metrics: computeSprintMetrics(bySprint.get(sprint.id) ?? [], today),
+        metrics: computeSprintMetrics(bySprint.get(sprint.id) ?? [], today, sprint),
     }));
 
     const active = summarised.find(sprint => sprint.status === 'active')
@@ -571,7 +584,7 @@ function buildSprintDetail({ sprint, tasks = [], dailyActuals = [], personnel = 
 
     const personnelById = new Map(personnel.map(person => [person.id, person]));
     const scope   = tasks.filter(task => task.sprint_id === sprint.id);
-    const metrics = computeSprintMetrics(scope, today);
+    const metrics = computeSprintMetrics(scope, today, sprint);
     const cards   = scope.map(task => toCard(task, { personnelById, today }));
 
     const columns = Object.fromEntries(

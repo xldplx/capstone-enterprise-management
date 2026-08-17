@@ -46,6 +46,11 @@ function MetricCard({ icon: Icon, label, value, unit, hint, tone = 'slate' }) {
 export default function SprintSummary({ metrics, capacity, velocity }) {
     const { t } = useTranslation();
 
+    // Points on the board as done, but not finished by the sprint's own end date.
+    // Velocity and the burndown both discount these, so the tile says so too
+    // rather than reporting 100% beside a burndown that still has work on it.
+    const latePoints = Math.max(0, (metrics.completed_points ?? 0) - (metrics.completed_in_sprint_points ?? 0));
+
     const velocityData = (velocity?.history || []).map(entry => ({
         name:      `S${entry.sprint_number}`,
         committed: entry.committed_points,
@@ -68,7 +73,9 @@ export default function SprintSummary({ metrics, capacity, velocity }) {
                     value={formatWholeNumber(metrics.completed_points)}
                     unit={t('agile.points')}
                     tone="emerald"
-                    hint={`${metrics.completion_pct}% ${t('agile.ofSprint')}`}
+                    hint={latePoints > 0
+                        ? `${formatWholeNumber(metrics.completed_in_sprint_points)} ${t('agile.bySprintEnd')}`
+                        : `${metrics.completion_pct}% ${t('agile.ofSprint')}`}
                 />
                 <MetricCard
                     icon={Gauge}
