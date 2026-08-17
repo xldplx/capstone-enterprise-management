@@ -61,7 +61,16 @@ async function loadProjectAgileData(projectId) {
         supabase.from('personnel').select('id, full_name, designation, status').eq('project_id', projectId),
     ]);
 
-    if (projectResult.error || !projectResult.data) {
+    // Distinguish "no such project" from "the query itself failed". Collapsing
+    // both into 404 hides the real cause — a missing column reports itself as a
+    // missing project, which sends you looking in entirely the wrong place.
+    if (projectResult.error) {
+        const noRows = projectResult.error.code === 'PGRST116'; // .single() matched nothing
+        const error = new Error(noRows ? 'Project not found.' : projectResult.error.message);
+        error.statusCode = noRows ? 404 : 500;
+        throw error;
+    }
+    if (!projectResult.data) {
         const error = new Error('Project not found.');
         error.statusCode = 404;
         throw error;
